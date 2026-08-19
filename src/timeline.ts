@@ -102,11 +102,51 @@ export function matchDate(dayIdx: number | undefined, f: { op: DateOp; value?: D
   }
 }
 
+// 時刻ズームの 1 コマ幅 / column width for the time-of-day zooms
+const HOUR_PX = 30; // Hour: 1 時間 / one hour
+const SLOT6_PX = 60; // Hour6: 6 時間 / one 6-hour slot
+
+// 'HH:mm' を日内位置（0–1）へ。時刻なし・不正値は undefined
+// 'HH:mm' as a 0–1 position within its day; undefined when absent or malformed
+export function dayFraction(time: string | undefined): number | undefined {
+  if (!time) return undefined;
+  const m = time.match(/^(\d{1,2}):(\d{2})/);
+  if (!m) return undefined;
+  const h = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  if (h > 23 || min > 59) return undefined;
+  return (h * 60 + min) / 1440;
+}
+
+// ドラッグのスナップ幅（分）。時刻ズームは 1 時間、それ以外は従来どおり 1 日
+// drag snap step in minutes: one hour at the time zooms, one whole day everywhere else
+export function snapMinutes(zoom: ZoomMode): number {
+  return zoom === "Hour" || zoom === "Hour6" ? 60 : 1440;
+}
+
+// 日付＋時刻を通算分へ（時刻なしは 0 時扱い）/ date + time as an absolute minute count (no time = midnight)
+export function toMinutes(dateStr: string, time?: string): number {
+  return dayIndex(dateStr) * 1440 + Math.round((dayFraction(time) ?? 0) * 1440);
+}
+
+// 通算分を日付と 'HH:mm' へ戻す / an absolute minute count back to a date and 'HH:mm'
+export function fromMinutes(mins: number): { date: string; time: string } {
+  const day = Math.floor(mins / 1440);
+  const inDay = mins - day * 1440;
+  const h = Math.floor(inDay / 60);
+  const m = inDay - h * 60;
+  return { date: dayToStr(day), time: `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}` };
+}
+
 // ズームごとの 1 日あたりピクセル / pixels per day per zoom
 // Fit はコンテナ幅から動的に算出するため、ここでは Week 相当のフォールバック
 // Fit is computed from the container width elsewhere; here it falls back to the Week scale
 export function pxPerDay(zoom: ZoomMode): number {
   switch (zoom) {
+    case "Hour":
+      return 24 * HOUR_PX;
+    case "Hour6":
+      return 4 * SLOT6_PX;
     case "Day":
       return 36;
     case "Week":
@@ -189,6 +229,23 @@ export interface Tick {
 export function buildTicks(range: DateRange, zoom: ZoomMode, ppd: number): Tick[] {
   const ticks: Tick[] = [];
   const wk = ["日", "月", "火", "水", "木", "金", "土"];
+  // 時刻ズームは 1 日を分割して刻む。0 時は日付ラベル（major）にして日境界を示す
+  // the time zooms subdivide each day; midnight carries the date label (major) to mark the day boundary
+  if (zoom === "Hour" || zoom === "Hour6") {
+    const step = zoom === "Hour" ? 1 : 6;
+    for (let day = range.min; day <= range.max; day++) {
+      const d = new Date(day * MS_PER_DAY);
+      for (let hr = 0; hr < 24; hr += step) {
+        const x = (day - range.min + hr / 24) * ppd;
+        if (hr === 0) {
+          ticks.push({ x, label: `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${wk[d.getUTCDay()]}`, major: true });
+        } else {
+          ticks.push({ x, label: `${hr}:00`, major: false });
+        }
+      }
+    }
+    return ticks;
+  }
   for (let day = range.min; day <= range.max; day++) {
     const d = new Date(day * MS_PER_DAY);
     const x = (day - range.min) * ppd;

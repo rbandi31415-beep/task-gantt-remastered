@@ -35,6 +35,7 @@ export interface Task {
   // optional time of day, set when frontmatter is "YYYY-MM-DDTHH:mm"; layout stays day-based
   startTime?: string; // HH:mm
   endTime?: string; // HH:mm
+  estimateMin?: number; // 見積り作業時間（分）。barSpan="estimate" のときバー長になる / estimated work in minutes; drives bar length when barSpan is "estimate"
   status?: string; // StatusDef.id を参照
   assignee?: string;
   deps: Dep[]; // 先行タスクへの依存（解決済み）/ resolved dependencies on predecessors
@@ -125,9 +126,10 @@ export interface GanttViewState {
   folder: string; // 表示対象フォルダのパス / scoped folder path ("" = vault root)
 }
 
-export const VIEW_TYPE_GANTT = "task-gantt-view";
+export const VIEW_TYPE_GANTT = "task-gantt-hours-view";
 // Fit = ペイン幅に収まるよう自動スケール / Fit = auto-scale to the pane width
-export type ZoomMode = "Day" | "Week" | "Month" | "Fit";
+// Hour / Hour6 は日内の時刻位置までバーを描く / Hour and Hour6 place bars at their time within the day
+export type ZoomMode = "Hour" | "Hour6" | "Day" | "Week" | "Month" | "Fit";
 
 // 表示用の日付フォーマット（保存値は常に ISO YYYY-MM-DD）/ display-only date format (stored value stays ISO)
 export type DateFormat = "YYYY/MM/DD" | "DD/MM/YYYY" | "MM/DD/YYYY";

@@ -1,10 +1,10 @@
 {
-  "id": "task-gantt",
-  "name": "Task Gantt",
-  "version": "2.9.1",
+  "id": "task-gantt-hours",
+  "name": "Task Gantt (Hours)",
+  "version": "2.9.1-hours.1",
   "minAppVersion": "1.7.2",
-  "description": "Manage tasks on an interactive Gantt timeline where each note is a single task. Drag bars to reschedule, link FS/SS/FF dependencies, set milestones, and edit details in a side panel.",
-  "author": "Kei Kato",
-  "authorUrl": "https://github.com/katoiek",
+  "description": "Fork of Task Gantt by Kei Kato, adding hour and 6-hour zoom levels, time-of-day bar placement, stepwise zoom, and bars measured by estimate rather than due date. Each note is a single task.",
+  "author": "Kei Kato (fork)",
+  "authorUrl": "https://github.com/katoiek/task-gantt",
   "isDesktopOnly": false
 }

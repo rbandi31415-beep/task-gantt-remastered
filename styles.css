@@ -26,6 +26,17 @@
   background: var(--interactive-accent);
   color: var(--text-on-accent);
 }
+/* 期限マーカー（バーが作業時間を表すモードで締切を示す）/ due marker: the deadline, when bars show work time instead */
+.ogantt-due-marker {
+  fill: var(--text-error);
+  opacity: 0.75;
+}
+/* 段階ズームボタン：記号 1 文字なので幅を詰める / stepwise zoom buttons: a single glyph, so keep them narrow */
+.ogantt-zoom-step {
+  min-width: 26px;
+  padding-left: 4px;
+  padding-right: 4px;
+}
 /* 新規タスク追加ボタン（アイコン＋ラベル）/ add-task button (icon + label) */
 .ogantt-add {
   display: inline-flex;

@@ -112,6 +112,12 @@ export interface GanttSettings {
     lastError: string; // 直近のエラー（設定画面に表示）/ latest error, shown in settings
     state: Record<string, GcalSyncState>; // パス → 同期スナップショット / path → sync snapshot
   };
+  // バーの長さの決め方。"dates"=開始→期限、"estimate"=開始→開始+見積り。
+  // 期限は締切であって作業時間ではないため、後者では期限をマーカーとして別に描く
+  // how a bar's length is decided: "dates" = start → due, "estimate" = start → start + estimate.
+  // a due date is a deadline rather than the work itself, so "estimate" draws it as a marker instead
+  barSpan: "dates" | "estimate";
+  defaultDurationMin: number; // 見積りが無いタスクのバー長（分）/ bar length for tasks with no estimate (minutes)
   // フロントマターのキー名（プロジェクトに合わせて変更可）/ frontmatter key names
   keys: {
     start: string;
@@ -122,6 +128,7 @@ export interface GanttSettings {
     progress: string;
     milestone: string;
     parent: string;
+    estimate: string; // 見積り（分）/ estimate in minutes
     gcalId: string; // イベント ID の保存先 / where the event id is stored
     gcal: string; // オプトインフラグ / the opt-in flag
   };
@@ -189,6 +196,8 @@ export const DEFAULT_SETTINGS: GanttSettings = {
     lastError: "",
     state: {},
   },
+  barSpan: "dates",
+  defaultDurationMin: 60,
   keys: {
     start: "start",
     end: "end",
@@ -198,6 +207,7 @@ export const DEFAULT_SETTINGS: GanttSettings = {
     progress: "progress",
     milestone: "milestone",
     parent: "parent",
+    estimate: "estimate",
     gcalId: "gcalId",
     gcal: "gcal",
   },
@@ -267,10 +277,36 @@ export class GanttSettingTab extends PluginSettingTab {
     setting.addToggle((t) => t.setValue(s.recurse).onChange((v) => { s.recurse = v; this.save(); }));
   }
 
+  // バー長の決め方と、見積り未設定時の既定長 / how bar length is decided, plus the fallback length
+  private ctlBarSpan(setting: Setting): void {
+    const s = this.plugin.settings;
+    setting.addDropdown((d) =>
+      d
+        .addOptions({ dates: "Start → Due", estimate: "Start + estimate" })
+        .setValue(s.barSpan)
+        .onChange((v) => {
+          s.barSpan = v as "dates" | "estimate";
+          this.save();
+        })
+    );
+    setting.addText((t) =>
+      t
+        .setPlaceholder("60")
+        .setValue(String(s.defaultDurationMin))
+        .onChange((v) => {
+          const n = Number(v);
+          if (Number.isFinite(n) && n > 0) {
+            s.defaultDurationMin = Math.round(n);
+            this.save();
+          }
+        })
+    );
+  }
+
   private ctlZoom(setting: Setting): void {
     const s = this.plugin.settings;
     setting.addDropdown((d) =>
-      d.addOptions({ Day: "Day", Week: "Week", Month: "Month", Fit: "Fit" }).setValue(s.defaultZoom).onChange((v) => {
+      d.addOptions({ Hour: "Hour", Hour6: "6 Hours", Day: "Day", Week: "Week", Month: "Month", Fit: "Fit" }).setValue(s.defaultZoom).onChange((v) => {
         s.defaultZoom = v as ZoomMode;
         this.save();
       })
@@ -640,6 +676,11 @@ export class GanttSettingTab extends PluginSettingTab {
       { name: tr().setDefaultFolderName, desc: tr().setDefaultFolderDesc, render: (x) => this.ctlRootFolder(x) },
       { name: tr().setRecurseName, desc: tr().setRecurseDesc, render: (x) => this.ctlRecurse(x) },
       { name: tr().setDefaultZoomName, render: (x) => this.ctlZoom(x) },
+      {
+        name: "Bar length",
+        desc: "What a bar spans. 'Start + estimate' draws the work itself and shows the due date as a marker; the box sets the length used when a task has no estimate (minutes).",
+        render: (x) => this.ctlBarSpan(x),
+      },
       { name: tr().setDateFormatName, render: (x) => this.ctlDateFormat(x) },
       { name: tr().setTimezoneName, desc: tr().setTimezoneDesc, render: (x) => this.ctlTimezone(x) },
       {
@@ -834,6 +875,13 @@ export class GanttSettingTab extends PluginSettingTab {
     this.ctlRootFolder(new Setting(containerEl).setName(tr().setDefaultFolderName).setDesc(tr().setDefaultFolderDesc));
     this.ctlRecurse(new Setting(containerEl).setName(tr().setRecurseName).setDesc(tr().setRecurseDesc));
     this.ctlZoom(new Setting(containerEl).setName(tr().setDefaultZoomName));
+    this.ctlBarSpan(
+      new Setting(containerEl)
+        .setName("Bar length")
+        .setDesc(
+          "What a bar spans. 'Start + estimate' draws the work itself and shows the due date as a marker; the box sets the length used when a task has no estimate (minutes)."
+        )
+    );
     this.ctlDateFormat(new Setting(containerEl).setName(tr().setDateFormatName));
     this.ctlTimezone(new Setting(containerEl).setName(tr().setTimezoneName).setDesc(tr().setTimezoneDesc));
     this.ctlProgressLineColor(

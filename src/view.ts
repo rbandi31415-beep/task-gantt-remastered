@@ -29,6 +29,10 @@ import {
   computeRange,
   dayIndex,
   dayToStr,
+  dayFraction,
+  snapMinutes,
+  toMinutes,
+  fromMinutes,
   pxPerDay,
   buildTicks,
   todayIndex,
@@ -47,6 +51,10 @@ const HEAD_H = 40; // ヘッダー高さ / header height
 const BAR_PAD = 5; // バーの上下余白 / vertical padding inside a row
 const RESIZE_EDGE = 8; // バー端リサイズの当たり幅 / edge-resize hit width
 const MIN_PPD = 2; // Fit 時の最小 1 日幅（これ未満は横スクロール）/ minimum px/day in Fit mode
+// ズームモードの基準幅にかける倍率の範囲と 1 段の刻み / range and step of the multiplier applied to a zoom mode's base width
+const ZOOM_MIN = 0.25;
+const ZOOM_MAX = 8;
+const ZOOM_STEP = 1.25;
 const FIT_SCROLLBAR_PAD = 16; // 縦スクロールバー分の余白 / room for the vertical scrollbar
 const FALLBACK_BAR = "#7c8db5"; // ステータス/担当者が未設定のときのバー色 / bar color when status/assignee is unset
 
@@ -62,6 +70,8 @@ const MAX_INDENT_DEPTH = 8; // インデントの段数上限（論理ツリー�
 export class GanttView extends ItemView {
   plugin: GanttPlugin;
   private zoom: ZoomMode;
+  private zoomFactor = 1; // 現在のズームモード基準幅への倍率 / multiplier on the current mode's base width
+  private pendingLeft: number | null = null; // 次の描画で復元する横位置（ズーム時の追従用）/ scroll offset for the next render (zoom anchoring)
   private tasks: Task[] = [];
   private rows: Row[] = [];
   private range: DateRange = { min: 0, max: 0 };
@@ -224,6 +234,17 @@ export class GanttView extends ItemView {
   // ドラッグや整列の直後、metadataCache 更新前に正しい位置を即表示するため / shows correct positions before metadataCache updates
   rerender(): void {
     if (!this.gridHost) this.buildSkeleton();
+    // .ogantt-main は作り直すのでスクロール位置が失われる。ドラッグのたびに先頭へ
+    // 戻ってしまうため、描画の前後で引き継ぐ（時刻ズームは横に長く影響が大きい）
+    // .ogantt-main is recreated below, which drops the scroll offset and throws the view back
+    // to the origin on every edit; carry it across (the time zooms are wide enough that this
+    // is the difference between usable and not)
+    const prevMain = this.gridHost.querySelector<HTMLElement>(".ogantt-main");
+    // ズーム時は追従先が指定される。それ以外は今の位置を維持 / a zoom supplies its own
+    // target offset; everything else just holds the current position
+    const keepLeft = this.pendingLeft ?? prevMain?.scrollLeft ?? 0;
+    const keepTop = prevMain?.scrollTop ?? 0;
+    this.pendingLeft = null;
     this.renderOptions(); // グループ/色分け/凡例を最新データで更新 / refresh layout options + legend
     this.renderFilterBar(); // 統合フィルタ行を最新データで更新 / refresh the unified filter row
     const view = this.processTasks(); // フィルタ＋グループ適用後 / after filter + group remap
@@ -251,17 +272,49 @@ export class GanttView extends ItemView {
       return;
     }
     const main = this.gridHost.createDiv({ cls: "ogantt-main" });
+    // Ctrl/Cmd + ホイールで拡大縮小。修飾なしは通常のスクロールのまま
+    // ctrl/cmd + wheel zooms; an unmodified wheel keeps scrolling as usual
+    main.addEventListener(
+      "wheel",
+      (e: WheelEvent) => {
+        if (!(e.ctrlKey || e.metaKey) || e.deltaY === 0) return;
+        e.preventDefault();
+        this.zoomBy(e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP, e.clientX);
+      },
+      { passive: false }
+    );
     this.renderGrid(main);
+    main.scrollLeft = Math.max(0, keepLeft);
+    main.scrollTop = keepTop;
   }
 
   // 1 日あたりピクセルを決定。Fit はペイン幅から算出（収まらなければ最小幅で横スクロール）
   // pixels-per-day; Fit derives it from the pane width (falls back to scrolling below MIN_PPD)
   private computePpd(): number {
-    if (this.zoom !== "Fit") return pxPerDay(this.zoom);
+    if (this.zoom !== "Fit") return pxPerDay(this.zoom) * this.zoomFactor;
     const totalDays = Math.max(1, this.range.max - this.range.min + 1);
     const avail = (this.gridHost?.clientWidth ?? 0) - this.tableWidth() - FIT_SCROLLBAR_PAD;
-    if (avail <= 0) return pxPerDay("Week"); // まだレイアウト前 / not laid out yet
-    return Math.max(MIN_PPD, Math.floor(avail / totalDays));
+    if (avail <= 0) return pxPerDay("Week") * this.zoomFactor; // まだレイアウト前 / not laid out yet
+    return Math.max(MIN_PPD, Math.floor(avail / totalDays) * this.zoomFactor);
+  }
+
+  // カーソル位置（無ければ表示中央）の日付を動かさずに倍率を変える。単純に倍率だけ
+  // 変えると見ていた場所が画面外へ飛ぶ / rescale while pinning the date under the cursor
+  // (or the viewport centre); changing the multiplier alone throws the spot you were
+  // looking at off-screen
+  private zoomBy(mult: number, anchorClientX?: number): void {
+    const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, this.zoomFactor * mult));
+    if (Math.abs(next - this.zoomFactor) < 1e-6) return; // 端に張り付いたら何もしない / already at the limit
+    const main = this.gridHost?.querySelector<HTMLElement>(".ogantt-main");
+    if (main) {
+      const cursor = anchorClientX != null ? anchorClientX - main.getBoundingClientRect().left : main.clientWidth / 2;
+      const dayAtCursor = (main.scrollLeft + cursor) / this.ppd;
+      this.zoomFactor = next;
+      this.pendingLeft = dayAtCursor * this.computePpd() - cursor;
+    } else {
+      this.zoomFactor = next;
+    }
+    this.rerender();
   }
 
   // ----- テーブル列 / table columns -----
@@ -864,16 +917,33 @@ export class GanttView extends ItemView {
     // 今日へスクロール / scroll to today
     const todayBtn = bar.createEl("button", { cls: "ogantt-today-btn", text: tr().today });
     todayBtn.onclick = () => this.scrollToToday();
-    (["Day", "Week", "Month", "Fit"] as ZoomMode[]).forEach((z) => {
-      const btn = bar.createEl("button", { text: z });
+    // Hour6 はボタン幅を抑えるため "6H" と表示 / label Hour6 as "6H" to keep the button narrow
+    const zoomLabel: Partial<Record<ZoomMode, string>> = { Hour: "1H", Hour6: "6H" };
+    (["Hour", "Hour6", "Day", "Week", "Month", "Fit"] as ZoomMode[]).forEach((z) => {
+      const btn = bar.createEl("button", { text: zoomLabel[z] ?? z });
       if (z === this.zoom) btn.addClass("is-active");
       btn.onclick = () => {
         this.zoom = z; // ppd は rerender 内の computePpd() が決める / ppd is set by computePpd() in rerender
+        this.zoomFactor = 1; // モードを選び直したら基準幅へ戻す / picking a mode resets it to its base width
         bar.querySelectorAll("button.is-active").forEach((b) => b.removeClass("is-active"));
         btn.addClass("is-active");
         void this.refresh();
       };
     });
+    // 段階ズーム（どのモードでも効く）。中央ボタンは基準幅へ戻す
+    // stepwise zoom, available in every mode; the middle button returns to the base width
+    const zoomOut = bar.createEl("button", { cls: "ogantt-zoom-step", text: "−" });
+    zoomOut.setAttr("aria-label", "Zoom out");
+    zoomOut.onclick = () => this.zoomBy(1 / ZOOM_STEP);
+    const zoomReset = bar.createEl("button", { cls: "ogantt-zoom-step", text: "⌖" });
+    zoomReset.setAttr("aria-label", "Reset zoom");
+    zoomReset.onclick = () => {
+      if (this.zoomFactor === 1) return;
+      this.zoomBy(1 / this.zoomFactor);
+    };
+    const zoomIn = bar.createEl("button", { cls: "ogantt-zoom-step", text: "+" });
+    zoomIn.setAttr("aria-label", "Zoom in");
+    zoomIn.onclick = () => this.zoomBy(ZOOM_STEP);
     // 取り消しボタン / undo button
     const undo = bar.createEl("button");
     setIcon(undo, "undo-2");
@@ -1381,8 +1451,34 @@ export class GanttView extends ItemView {
     svg.appendChild(handlesLayer); // 矢印の上にハンドルを重ねる / handles above arrows
   }
 
-  private xOf(dateStr: string): number {
-    return (dayIndex(dateStr) - this.range.min) * this.ppd;
+  private xOf(dateStr: string, frac = 0): number {
+    return (dayIndex(dateStr) - this.range.min + frac) * this.ppd;
+  }
+
+  // 通算分の位置を x へ / an absolute minute count to an x offset
+  private xOfMinutes(mins: number): number {
+    return (mins / 1440 - this.range.min) * this.ppd;
+  }
+
+  // バーが占める区間（分）。estimate モードは開始＋見積り（無ければ既定長）で、期限には
+  // 触れない。dates モードは開始→期限で、終了時刻が無ければその日の終わりまで＝従来の
+  // 「終了日を含む」幅と一致する
+  // the minute span a bar covers: in estimate mode, start + estimate (or the configured default)
+  // with the due date left out of it entirely; in dates mode, start → due, where a missing end
+  // time runs to that day's end — reproducing the original inclusive-end width exactly
+  private taskSpanMinutes(t: Task): { s: number; e: number } {
+    const st = this.plugin.settings;
+    const s = toMinutes(anchorStart(t) ?? t.start!, t.startTime);
+    if (st.barSpan === "estimate" && !t.milestone) {
+      return { s, e: s + Math.max(1, t.estimateMin ?? st.defaultDurationMin) };
+    }
+    const endStr = anchorEnd(t) ?? t.start!;
+    return { s, e: t.endTime ? toMinutes(endStr, t.endTime) : toMinutes(endStr) + 1440 };
+  }
+
+  private barBox(t: Task): { x: number; w: number } {
+    const { s, e } = this.taskSpanMinutes(t);
+    return { x: this.xOfMinutes(s), w: Math.max(((e - s) / 1440) * this.ppd, 6) };
   }
 
   private drawGrid(svg: SVGElement, width: number, height: number): void {
@@ -1415,11 +1511,9 @@ export class GanttView extends ItemView {
       if (this.rollup && row.span) return {};
       const aStart = anchorStart(t);
       if (!aStart) return {};
-      const x = this.xOf(aStart);
+      const { x, w } = this.barBox(t);
       if (!Number.isFinite(x)) return {}; // 不正な日付で折れ線が壊れないように / a bad date must not break the polyline
       if (t.milestone) return { startX: x, width: 0, progress: t.progress };
-      const endStr = anchorEnd(t) ?? aStart;
-      const w = Math.max((dayIndex(endStr) - dayIndex(aStart) + 1) * this.ppd, 6);
       return { startX: x, width: Number.isFinite(w) ? w : 0, progress: t.progress };
     });
     const pts = buildProgressLine(lineRows, basisX, ROW_H, height);
@@ -1476,7 +1570,21 @@ export class GanttView extends ItemView {
       if (!aStart) return;
       const y = i * ROW_H + BAR_PAD;
       const h = ROW_H - BAR_PAD * 2;
-      const x = this.xOf(aStart);
+      const x = this.barBox(t).x;
+      // estimate モードではバーが期限を表さないので、締切を別マーカーで残す
+      // in estimate mode the bar no longer represents the deadline, so keep due as its own marker
+      if (this.plugin.settings.barSpan === "estimate" && !t.milestone && t.end) {
+        const dx = this.xOfMinutes(t.endTime ? toMinutes(t.end, t.endTime) : toMinutes(t.end) + 1440);
+        if (Number.isFinite(dx)) {
+          const r = 4;
+          svg.appendChild(
+            this.svgEl("path", {
+              d: `M ${dx} ${cyText(i) - 10} L ${dx + r} ${cyText(i) - 6} L ${dx} ${cyText(i) - 2} L ${dx - r} ${cyText(i) - 6} Z`,
+              class: "ogantt-due-marker",
+            })
+          );
+        }
+      }
       const color =
         this.colorBy === "assignee"
           ? t.assignee ? hashColor(t.assignee) : FALLBACK_BAR
@@ -1501,8 +1609,7 @@ export class GanttView extends ItemView {
         lx = cx - r;
         rx = cx + r;
       } else {
-        const endStr = anchorEnd(t) ?? aStart;
-        const w = Math.max((dayIndex(endStr) - dayIndex(aStart) + 1) * this.ppd, 6);
+        const { w } = this.barBox(t);
         const rect = this.svgEl("rect", { x, y, width: w, height: h, rx: 4, class: "ogantt-bar", fill: color });
         g.appendChild(rect);
         if (t.progress != null && t.progress > 0) {
@@ -1848,6 +1955,10 @@ export class GanttView extends ItemView {
         mode = offset < EDGE ? "l" : offset > box.width - EDGE ? "r" : "move";
       }
 
+      // プレビューの最小幅はスナップ 1 コマ分。ppd 固定だと時刻ズームで 1 日より
+      // 短くできない / the preview floor is one snap step; a fixed ppd would stop a bar
+      // shrinking below a whole day at the time zooms
+      const minW = (this.ppd * snapMinutes(this.zoom)) / 1440;
       const onMove = (e: PointerEvent) => {
         const dx = e.clientX - startX;
         if (Math.abs(dx) > 3) this.dragged.set(g, true);
@@ -1856,41 +1967,77 @@ export class GanttView extends ItemView {
           return;
         }
         if (mode === "move") handle.setAttribute("x", String(x0 + dx));
-        else if (mode === "r") handle.setAttribute("width", String(Math.max(this.ppd, w0 + dx)));
+        else if (mode === "r") handle.setAttribute("width", String(Math.max(minW, w0 + dx)));
         else {
           handle.setAttribute("x", String(x0 + dx));
-          handle.setAttribute("width", String(Math.max(this.ppd, w0 - dx)));
+          handle.setAttribute("width", String(Math.max(minW, w0 - dx)));
         }
       };
       const onUp = (e: PointerEvent) => void (async () => {
         handle.releasePointerCapture(ev.pointerId);
         handle.removeEventListener("pointermove", onMove);
         handle.removeEventListener("pointerup", onUp);
-        const dxDays = Math.round((e.clientX - startX) / this.ppd);
-        if (dxDays !== 0) {
+        // 分単位で移動量を求め、ズームのスナップ幅へ丸める。日ズームでは幅が 1 日なので
+        // 従来と同じ挙動になる / resolve the drag in minutes, snapped to the zoom's step;
+        // at the day zooms the step is a whole day, so this behaves exactly as before
+        const step = snapMinutes(this.zoom);
+        const dMin = Math.round((e.clientX - startX) / (this.ppd / 1440) / step) * step;
+        // 元から時刻が無く 0 時に着地した辺は時刻を書かない（日ズームでの往復で
+        // "00:00" が生えるのを防ぐ）/ an edge that had no time and lands on midnight stays
+        // timeless, so a day-zoom drag can't sprout a spurious "00:00"
+        const keep = (had: string | undefined, t: string) => (had || t !== "00:00" ? t : undefined);
+        if (dMin !== 0) {
           await this.pushUndo(tr().undoReschedule(task.name));
           if (milestone) {
-            const nd = dayToStr(dayIndex(task.end ?? task.start!) + dxDays);
-            await writeDates(this.app, this.plugin.settings, task.path, nd, nd, true);
-            task.end = nd; // メモリ更新 / update in-memory
+            const n = fromMinutes(toMinutes(task.end ?? task.start!, task.endTime) + dMin);
+            const nt = keep(task.endTime, n.time);
+            await writeDates(this.app, this.plugin.settings, task.path, n.date, n.date, true, { end: nt });
+            task.end = n.date; // メモリ更新 / update in-memory
+            task.endTime = nt;
+          } else if (this.plugin.settings.barSpan === "estimate") {
+            // バーは 開始＋見積り。移動は開始だけを動かし、端のリサイズは見積りを書き換える。
+            // 期限は締切なので一切触らない
+            // the bar is start + estimate: a move shifts the start, an edge resize rewrites the
+            // estimate, and the due date is never touched
+            const span = this.taskSpanMinutes(task);
+            const len = span.e - span.s;
+            let ns = span.s;
+            let nlen = len;
+            if (mode === "move") ns = span.s + dMin;
+            else if (mode === "r") nlen = Math.max(1, len + dMin);
+            else {
+              ns = Math.min(span.e - 1, span.s + dMin); // 右端を固定 / hold the right edge
+              nlen = span.e - ns;
+            }
+            const nsP = fromMinutes(ns);
+            const nst = keep(task.startTime, nsP.time);
+            await writeDates(this.app, this.plugin.settings, task.path, nsP.date, nsP.date, false, { start: nst }, { keepEnd: true });
+            if (nlen !== len) await writeField(this.app, task.path, this.plugin.settings.keys.estimate, Math.round(nlen));
+            task.start = nsP.date; // メモリ更新 / update in-memory
+            task.startTime = nst;
+            task.estimateMin = Math.round(nlen);
           } else {
-            const s0 = dayIndex(task.start!);
-            const e0 = dayIndex(task.end ?? task.start!);
+            const s0 = toMinutes(task.start!, task.startTime);
+            const e0 = toMinutes(task.end ?? task.start!, task.endTime);
             let ns = s0;
             let ne = e0;
             if (mode === "move") {
-              ns = s0 + dxDays;
-              ne = e0 + dxDays;
+              ns = s0 + dMin;
+              ne = e0 + dMin;
             } else if (mode === "r") {
-              ne = Math.max(s0, e0 + dxDays);
+              ne = Math.max(s0, e0 + dMin);
             } else {
-              ns = Math.min(e0, s0 + dxDays);
+              ns = Math.min(e0, s0 + dMin);
             }
-            const nsS = dayToStr(ns);
-            const neS = dayToStr(ne);
-            await writeDates(this.app, this.plugin.settings, task.path, nsS, neS, false);
-            task.start = nsS; // メモリ更新 / update in-memory
-            task.end = neS;
+            const nsP = fromMinutes(ns);
+            const neP = fromMinutes(ne);
+            const nst = keep(task.startTime, nsP.time);
+            const net = keep(task.endTime, neP.time);
+            await writeDates(this.app, this.plugin.settings, task.path, nsP.date, neP.date, false, { start: nst, end: net });
+            task.start = nsP.date; // メモリ更新 / update in-memory
+            task.startTime = nst;
+            task.end = neP.date;
+            task.endTime = net;
           }
           // SS/FF 後続を連動（メモリ更新＋ディスク書き込み）/ cascade to SS/FF successors
           await this.realignSuccessors(task.path);

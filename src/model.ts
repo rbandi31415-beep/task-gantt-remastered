@@ -185,6 +185,8 @@ export function collectTasks(app: App, settings: GanttSettings, folderPath: stri
       end,
       startTime: ps?.time,
       endTime: pe?.time,
+      // 0 以下や数値でない見積りは「未設定」として既定長へ倒す / non-numeric or non-positive estimates fall back to the default length
+      estimateMin: Number.isFinite(Number(fm[k.estimate])) && Number(fm[k.estimate]) > 0 ? Number(fm[k.estimate]) : undefined,
       status: fm[k.status] != null ? String(fm[k.status]) : undefined,
       assignee: fm[k.assignee] != null ? String(fm[k.assignee]) : undefined,
       deps: [] as Dep[],
@@ -355,13 +357,21 @@ export function buildRows(
 }
 
 // フロントマターの開始/終了を書き戻す / write back start/end into frontmatter
+// `times` を渡すとその時刻で上書きする（undefined の辺は時刻を落とす）。省略時は
+// 既存の時刻を引き継ぐ従来動作
+// passing `times` overrides the time on each edge (an undefined edge clears its time);
+// omitting it keeps the previous behaviour of carrying the existing times over
 export async function writeDates(
   app: App,
   settings: GanttSettings,
   path: string,
   start: string,
   end: string,
-  milestone: boolean
+  milestone: boolean,
+  times?: { start?: string; end?: string },
+  // estimate モードでは期限は締切であってバー終端ではないので触らない
+  // in estimate mode the due date is a deadline, not the bar's end, so leave it alone
+  opts?: { keepEnd?: boolean }
 ): Promise<void> {
   const file = app.vault.getAbstractFileByPath(path);
   if (!(file instanceof TFile)) return;
@@ -369,15 +379,15 @@ export async function writeDates(
   await app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
     // 既存値に時刻が付いていたら表示時刻を新しい日付へ引き継ぐ（オフセットは設定タイムゾーンへ正規化）
     // carry the displayed time-of-day over to the new date (re-normalizing the offset to the configured tz)
-    const ts = parseStored(fm[k.start], settings.tz)?.time;
-    const te = parseStored(fm[k.end], settings.tz)?.time;
+    const ts = times ? times.start : parseStored(fm[k.start], settings.tz)?.time;
+    const te = times ? times.end : parseStored(fm[k.end], settings.tz)?.time;
     if (milestone) {
       // マイルストーンは期限(end)のみ / milestone keeps only the due date
       fm[k.end] = combineDateTime(end, te, settings.tz);
       delete fm[k.start];
     } else {
       fm[k.start] = combineDateTime(start, ts, settings.tz);
-      fm[k.end] = combineDateTime(end, te, settings.tz);
+      if (!opts?.keepEnd) fm[k.end] = combineDateTime(end, te, settings.tz);
     }
   });
 }
