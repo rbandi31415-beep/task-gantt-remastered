@@ -79,6 +79,35 @@
   margin: 0;
   cursor: pointer;
 }
+/* 表示範囲チップ（クリックで範囲カレンダー、指定中は背景を強調＋×で解除）
+   view-range chip (click opens the range calendar; tinted + × to clear while a range is pinned) */
+.ogantt-opt-range {
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.ogantt-opt-range:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+.ogantt-opt-range.is-set {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+.ogantt-opt-range-x {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 2px;
+  border-radius: 999px;
+}
+.ogantt-opt-range-x:hover {
+  color: var(--text-error);
+}
+.ogantt-opt-range-x svg {
+  width: 12px;
+  height: 12px;
+}
 /* 列の出し分け（歯車ボタン）/ column visibility gear button */
 .ogantt-opt-gear {
   display: inline-flex;
@@ -490,8 +519,13 @@
   flex: none;
 }
 
-/* 単一スクロール内の CSS グリッド。sticky で表ヘッダ・日付軸・左列を固定し行を揃える */
-/* CSS grid in one scroll container; sticky heads + left column keep rows aligned */
+/* 表ヘッダ・左列は固定し、実際にスクロールする領域は .ogantt-scroll だけ（横も縦もここ1箇所）。
+   固定側は position: sticky ではなく transform で .ogantt-scroll の scrollLeft/scrollTop に追従させる
+   （sticky は「表がスクロール領域と一緒に流れる／スクロールバーが二重に出る」不具合が起きたため）
+   the table header and left column are pinned; the only real scrolling region is .ogantt-scroll
+   (one scrollbar pair total, both axes). The pinned side is repositioned via transform in lockstep
+   with .ogantt-scroll's scrollLeft/scrollTop, rather than position: sticky (sticky was letting the
+   table drift away with the scroll and producing a second, independent scrollbar) */
 .ogantt-host {
   flex: 1;
   min-height: 0;
@@ -500,20 +534,41 @@
 .ogantt-main {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.ogantt-headrow {
+  flex: none;
+  display: flex;
+  overflow: hidden;
+}
+.ogantt-bodyrow {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+.ogantt-axis-viewport {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  position: relative;
+}
+.ogantt-tbody-viewport {
+  flex: none;
+  overflow: hidden;
+  position: relative;
+}
+/* 実スクロール領域：横スクロールバー1本・縦スクロールバー1本のみ、常にここにだけ出る
+   the real scroll region: exactly one horizontal + one vertical scrollbar, always here only */
+.ogantt-scroll {
+  flex: 1;
+  min-width: 0;
   overflow: auto;
+  position: relative;
 }
-.ogantt-grid {
-  display: grid;
-  /* columns/rows are set inline from JS */
-}
-
 .ogantt-corner {
-  position: sticky;
-  top: 0;
-  left: 0;
-  z-index: 3;
-  grid-column: 1;
-  grid-row: 1;
   display: flex;
   align-items: center;
   background: var(--background-secondary);
@@ -521,6 +576,7 @@
   border-bottom: 1px solid var(--background-modifier-border);
   font-size: 0.8em;
   color: var(--text-muted);
+  height: 100%;
 }
 .ogantt-th {
   width: 84px;
@@ -549,12 +605,13 @@
   font-size: 0.9em;
 }
 .ogantt-tbody {
-  position: sticky;
+  position: absolute;
+  top: 0;
   left: 0;
-  z-index: 1;
-  grid-column: 1;
-  grid-row: 2;
+  width: 100%;
   background: var(--background-primary);
+}
+.ogantt-tbody-viewport {
   border-right: 1px solid var(--background-modifier-border);
 }
 .ogantt-tr {
@@ -753,17 +810,15 @@ input.ogantt-cell-input[type="number"] {
 
 /* ---- 右のタイムライン / right timeline ---- */
 .ogantt-axis {
-  position: sticky;
+  position: absolute;
   top: 0;
-  z-index: 2;
-  grid-column: 2;
-  grid-row: 1;
+  left: 0;
+  height: 100%;
   background: var(--background-secondary);
   border-bottom: 1px solid var(--background-modifier-border);
 }
 .ogantt-svgwrap {
-  grid-column: 2;
-  grid-row: 2;
+  line-height: 0; /* svg のインライン下端すき間を消す / kill the inline-element gap under the svg */
 }
 .ogantt-tick {
   position: absolute;

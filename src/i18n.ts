@@ -48,6 +48,9 @@ interface Strings {
   optFlat: string;
   optRollup: string;
   optProgressLine: string;
+  optRangeLabel: string; // 表示範囲ボタンのツールチップ / view-range button tooltip
+  optRangeAuto: string; // 手動指定なしのときの表示 / shown when no manual range is set
+  optRangeReset: string; // 自動に戻すボタンの aria-label / aria-label for the reset-to-auto button
   filterAll: string;
   noneLabel: string;
   // 日付フィルタ（開始日/期限日）/ date filter (start/due). 対象名は fieldStart/fieldDue、today は today を流用
@@ -265,6 +268,9 @@ const STRINGS: Record<Lang, Strings> = {
     optFlat: "フラット表示",
     optRollup: "ロールアップ",
     optProgressLine: "稲妻線",
+    optRangeLabel: "表示範囲",
+    optRangeAuto: "自動",
+    optRangeReset: "自動範囲に戻す",
     filterAll: "すべて",
     noneLabel: "（なし）",
     nothingToUndo: "取り消す操作がありません",
@@ -465,6 +471,9 @@ const STRINGS: Record<Lang, Strings> = {
     optFlat: "Flat",
     optRollup: "Roll up",
     optProgressLine: "Progress line",
+    optRangeLabel: "View range",
+    optRangeAuto: "Auto",
+    optRangeReset: "Reset to auto range",
     filterAll: "All",
     noneLabel: "(none)",
     nothingToUndo: "Nothing to undo",
@@ -665,6 +674,9 @@ const STRINGS: Record<Lang, Strings> = {
     optFlat: "平铺",
     optRollup: "汇总",
     optProgressLine: "进度线",
+    optRangeLabel: "显示范围",
+    optRangeAuto: "自动",
+    optRangeReset: "恢复自动范围",
     filterAll: "全部",
     noneLabel: "（无）",
     nothingToUndo: "没有可撤销的操作",
@@ -865,6 +877,9 @@ const STRINGS: Record<Lang, Strings> = {
     optFlat: "平面",
     optRollup: "彙總",
     optProgressLine: "進度線",
+    optRangeLabel: "顯示範圍",
+    optRangeAuto: "自動",
+    optRangeReset: "恢復自動範圍",
     filterAll: "全部",
     noneLabel: "（無）",
     nothingToUndo: "沒有可復原的操作",
@@ -1065,6 +1080,9 @@ const STRINGS: Record<Lang, Strings> = {
     optFlat: "평면",
     optRollup: "롤업",
     optProgressLine: "진척선",
+    optRangeLabel: "표시 범위",
+    optRangeAuto: "자동",
+    optRangeReset: "자동 범위로 재설정",
     filterAll: "전체",
     noneLabel: "(없음)",
     nothingToUndo: "취소할 작업이 없습니다",
@@ -1265,6 +1283,9 @@ const STRINGS: Record<Lang, Strings> = {
     optFlat: "À plat",
     optRollup: "Synthèse",
     optProgressLine: "Ligne d'avancement",
+    optRangeLabel: "Plage affichée",
+    optRangeAuto: "Auto",
+    optRangeReset: "Revenir à la plage automatique",
     filterAll: "Tous",
     noneLabel: "(aucun)",
     nothingToUndo: "Rien à annuler",
@@ -1465,6 +1486,9 @@ const STRINGS: Record<Lang, Strings> = {
     optFlat: "Plano",
     optRollup: "Resumen",
     optProgressLine: "Línea de avance",
+    optRangeLabel: "Rango de vista",
+    optRangeAuto: "Automático",
+    optRangeReset: "Restablecer al rango automático",
     filterAll: "Todos",
     noneLabel: "(ninguno)",
     nothingToUndo: "Nada que deshacer",
@@ -1665,6 +1689,9 @@ const STRINGS: Record<Lang, Strings> = {
     optFlat: "Плоский список",
     optRollup: "Сводка",
     optProgressLine: "Линия прогресса",
+    optRangeLabel: "Диапазон просмотра",
+    optRangeAuto: "Авто",
+    optRangeReset: "Сбросить на автоматический диапазон",
     filterAll: "Все",
     noneLabel: "(нет)",
     nothingToUndo: "Нечего отменять",

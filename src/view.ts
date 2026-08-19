@@ -76,6 +76,8 @@ export class GanttView extends ItemView {
   private tasks: Task[] = [];
   private rows: Row[] = [];
   private range: DateRange = { min: 0, max: 0 };
+  // 表示範囲の手動指定（null＝タスクから自動計算）/ manually pinned view range (null = auto from tasks)
+  private customRange: { start: string; end: string } | null = null;
   private ppd = 16;
   private selectedPath: string | null = null;
   private folder = ""; // 表示対象フォルダ / scoped folder path
@@ -239,16 +241,16 @@ export class GanttView extends ItemView {
   // ドラッグや整列の直後、metadataCache 更新前に正しい位置を即表示するため / shows correct positions before metadataCache updates
   rerender(): void {
     if (!this.gridHost) this.buildSkeleton();
-    // .ogantt-main は作り直すのでスクロール位置が失われる。ドラッグのたびに先頭へ
+    // .ogantt-scroll は作り直すのでスクロール位置が失われる。ドラッグのたびに先頭へ
     // 戻ってしまうため、描画の前後で引き継ぐ（時刻ズームは横に長く影響が大きい）
-    // .ogantt-main is recreated below, which drops the scroll offset and throws the view back
+    // .ogantt-scroll is recreated below, which drops the scroll offset and throws the view back
     // to the origin on every edit; carry it across (the time zooms are wide enough that this
     // is the difference between usable and not)
-    const prevMain = this.gridHost.querySelector<HTMLElement>(".ogantt-main");
+    const prevScroll = this.gridHost.querySelector<HTMLElement>(".ogantt-scroll");
     // ズーム時は追従先が指定される。それ以外は今の位置を維持 / a zoom supplies its own
     // target offset; everything else just holds the current position
-    const keepLeft = this.pendingLeft ?? prevMain?.scrollLeft ?? 0;
-    const keepTop = prevMain?.scrollTop ?? 0;
+    const keepLeft = this.pendingLeft ?? prevScroll?.scrollLeft ?? 0;
+    const keepTop = prevScroll?.scrollTop ?? 0;
     this.pendingLeft = null;
     this.renderOptions(); // グループ/色分け/凡例を最新データで更新 / refresh layout options + legend
     this.renderFilterBar(); // 統合フィルタ行を最新データで更新 / refresh the unified filter row
@@ -263,7 +265,15 @@ export class GanttView extends ItemView {
       // 親子ネストはフォルダグループ化のときだけ / nest by parent only when grouping by folder
       this.rows = buildRows(view, this.collapsed, folders, compare, this.groupBy === "folder");
     }
-    this.range = clampRangeForZoom(computeRange(view), this.zoom);
+    if (this.customRange) {
+      // 手動指定：逆転していれば入れ替え、少なくとも1日は確保する
+      // manual pin: swap if inverted, and guarantee at least one day
+      const a = dayIndex(this.customRange.start);
+      const b = dayIndex(this.customRange.end);
+      this.range = { min: Math.min(a, b), max: Math.max(a, b, Math.min(a, b) + 1) };
+    } else {
+      this.range = clampRangeForZoom(computeRange(view), this.zoom);
+    }
     this.ppd = this.computePpd();
     const titleEl = this.contentEl.querySelector(".ogantt-title");
     if (titleEl) titleEl.setText(this.folder || "(vault root)");
@@ -277,20 +287,7 @@ export class GanttView extends ItemView {
       return;
     }
     const main = this.gridHost.createDiv({ cls: "ogantt-main" });
-    // Ctrl/Cmd + ホイールで拡大縮小。修飾なしは通常のスクロールのまま
-    // ctrl/cmd + wheel zooms; an unmodified wheel keeps scrolling as usual
-    main.addEventListener(
-      "wheel",
-      (e: WheelEvent) => {
-        if (!(e.ctrlKey || e.metaKey) || e.deltaY === 0) return;
-        e.preventDefault();
-        this.queueWheelZoom(e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP, e.clientX);
-      },
-      { passive: false }
-    );
-    this.renderGrid(main);
-    main.scrollLeft = Math.max(0, keepLeft);
-    main.scrollTop = keepTop;
+    this.renderGrid(main, Math.max(0, keepLeft), keepTop);
   }
 
   // 1 日あたりピクセルを決定。Fit はペイン幅から算出（収まらなければ最小幅で横スクロール）
@@ -310,10 +307,10 @@ export class GanttView extends ItemView {
   private zoomBy(mult: number, anchorClientX?: number): void {
     const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, this.zoomFactor * mult));
     if (Math.abs(next - this.zoomFactor) < 1e-6) return; // 端に張り付いたら何もしない / already at the limit
-    const main = this.gridHost?.querySelector<HTMLElement>(".ogantt-main");
-    if (main) {
-      const cursor = anchorClientX != null ? anchorClientX - main.getBoundingClientRect().left : main.clientWidth / 2;
-      const dayAtCursor = (main.scrollLeft + cursor) / this.ppd;
+    const scrollEl = this.gridHost?.querySelector<HTMLElement>(".ogantt-scroll");
+    if (scrollEl) {
+      const cursor = anchorClientX != null ? anchorClientX - scrollEl.getBoundingClientRect().left : scrollEl.clientWidth / 2;
+      const dayAtCursor = (scrollEl.scrollLeft + cursor) / this.ppd;
       this.zoomFactor = next;
       this.pendingLeft = dayAtCursor * this.computePpd() - cursor;
     } else {
@@ -1047,6 +1044,24 @@ export class GanttView extends ItemView {
       (v) => { this.colorBy = v as typeof this.colorBy; this.rerender(); }
     );
 
+    // 表示範囲（未指定＝タスクから自動計算）。クリックで範囲カレンダー、指定中は×で自動へ戻す
+    // view range (unset = auto-computed from tasks). Click opens the range calendar; × resets to auto
+    const rangeBtn = host.createDiv({ cls: "ogantt-opt ogantt-opt-range" + (this.customRange ? " is-set" : "") });
+    const rangeIco = rangeBtn.createSpan({ cls: "ogantt-opt-ico" });
+    setIcon(rangeIco, "calendar-range");
+    rangeIco.setAttr("aria-label", tr().optRangeLabel);
+    rangeBtn.createSpan({ text: this.customRange ? this.formatRangeLabel(this.customRange) : tr().optRangeAuto });
+    rangeBtn.onclick = (e) => {
+      if ((e.target as Element).closest(".ogantt-opt-range-x")) return;
+      this.openViewRangePicker(rangeBtn);
+    };
+    if (this.customRange) {
+      const x = rangeBtn.createSpan({ cls: "ogantt-opt-range-x" });
+      setIcon(x, "x");
+      x.setAttr("aria-label", tr().optRangeReset);
+      x.onclick = (e) => { e.stopPropagation(); this.customRange = null; this.rerender(); };
+    }
+
     // ── 表示切替（絞り込みは下の統合フィルタ行へ集約）/ display toggles (filtering lives in the filter row below) ──
     host.createDiv({ cls: "ogantt-opt-divider" });
 
@@ -1224,12 +1239,12 @@ export class GanttView extends ItemView {
 
   // 今日の線が中央に来るよう横スクロール / scroll horizontally so the today marker is centered
   private scrollToToday(): void {
-    const main = this.gridHost.querySelector<HTMLElement>(".ogantt-main");
-    const todayLine = main?.querySelector<SVGElement>(".ogantt-today");
-    if (!main || !todayLine) return; // 今日が範囲外＝線が無い / no marker when today is out of range
-    const mb = main.getBoundingClientRect();
+    const scrollEl = this.gridHost.querySelector<HTMLElement>(".ogantt-scroll");
+    const todayLine = scrollEl?.querySelector<SVGElement>(".ogantt-today");
+    if (!scrollEl || !todayLine) return; // 今日が範囲外＝線が無い / no marker when today is out of range
+    const mb = scrollEl.getBoundingClientRect();
     const tb = todayLine.getBoundingClientRect();
-    main.scrollLeft += tb.left - mb.left - main.clientWidth / 2;
+    scrollEl.scrollLeft += tb.left - mb.left - scrollEl.clientWidth / 2;
   }
 
   // ----- 取り消し（Undo）-----
@@ -1286,24 +1301,32 @@ export class GanttView extends ItemView {
     if (this.undoBtn) this.undoBtn.disabled = this.undoStack.length === 0;
   }
 
-  // ----- 表＋タイムラインを 1 つの CSS グリッドで（sticky で行を揃える）-----
-  // ----- table + timeline in one CSS grid; sticky heads/left column keep rows aligned -----
-  private renderGrid(main: HTMLElement): void {
+  // ----- 表＋タイムライン。実スクロールは .ogantt-scroll だけで行い、表ヘッダ・左列は
+  // その scrollLeft/scrollTop に transform で追従させる（固定側専用の scrollbar は無い）
+  // ----- table + timeline. The only real scrolling happens in .ogantt-scroll; the table
+  // header and left column track its scrollLeft/scrollTop via transform (the pinned side
+  // has no scrollbar of its own) -----
+  private renderGrid(main: HTMLElement, keepLeft: number, keepTop: number): void {
     const totalDays = this.range.max - this.range.min + 1;
     const width = totalDays * this.ppd;
     const bodyH = this.rows.length * ROW_H;
+    const tw = this.tableWidth();
 
     const cols = this.visibleColumns();
-    const grid = main.createDiv({ cls: "ogantt-grid" });
-    grid.style.gridTemplateColumns = `${this.tableWidth()}px ${width}px`;
-    grid.style.gridTemplateRows = `${HEAD_H}px ${bodyH}px`;
+    // 列幅ドラッグのクロージャから後で参照する（この時点ではまだ未生成）
+    // referenced later from the column-resize drag closure (not created yet at this point)
+    let tbodyViewport: HTMLElement;
 
     // 行ループ内ではローカル変数 tr（行要素）が i18n の tr() を隠すため、先に文言を退避
     // the row var `tr` shadows the i18n tr() inside the loop, so grab strings up front
     const strings = tr();
 
+    const headRow = main.createDiv({ cls: "ogantt-headrow" });
+    headRow.style.height = `${HEAD_H}px`;
+
     // (1) 左上の角＝表ヘッダー（表示中の列を並べる・クリックでソート）/ top-left corner = header (click to sort)
-    const corner = grid.createDiv({ cls: "ogantt-corner" });
+    const corner = headRow.createDiv({ cls: "ogantt-corner" });
+    corner.style.width = `${tw}px`;
     for (const id of cols) {
       const th = corner.createDiv({ cls: "ogantt-th ogantt-th-sortable" + (id === "name" ? " ogantt-th-name" : "") });
       if (id !== "name") th.style.width = `${this.colW(id)}px`;
@@ -1339,7 +1362,9 @@ export class GanttView extends ItemView {
           const w = Math.max(40, Math.round(startW + ev.clientX - startX));
           this.plugin.settings.columnWidths[id] = w;
           // ドラッグ中は再描画せず幅だけ反映 / live-apply widths without a full re-render
-          grid.style.gridTemplateColumns = `${this.tableWidth()}px ${width}px`;
+          const newTw = `${this.tableWidth()}px`;
+          corner.style.width = newTw;
+          tbodyViewport.style.width = newTw;
           if (id !== "name") {
             th.style.width = `${w}px`;
             this.tbodyEl
@@ -1362,15 +1387,22 @@ export class GanttView extends ItemView {
     // Fit は算出した ppd から目盛り粒度を選ぶ / in Fit, pick tick granularity from the computed ppd
     const tickZoom: ZoomMode =
       this.zoom !== "Fit" ? this.zoom : this.ppd >= 24 ? "Day" : this.ppd >= 10 ? "Week" : "Month";
-    const axis = grid.createDiv({ cls: "ogantt-axis" });
+    const axisViewport = headRow.createDiv({ cls: "ogantt-axis-viewport" });
+    const axis = axisViewport.createDiv({ cls: "ogantt-axis" });
+    axis.style.width = `${width}px`;
     for (const tick of buildTicks(this.range, tickZoom, this.ppd)) {
       const t = axis.createDiv({ cls: "ogantt-tick" + (tick.major ? " is-major" : "") });
       t.style.left = `${tick.x}px`;
       t.setText(tick.label);
     }
 
+    const bodyRow = main.createDiv({ cls: "ogantt-bodyrow" });
+
     // (3) 表の本体 / table body
-    const body = grid.createDiv({ cls: "ogantt-tbody" });
+    tbodyViewport = bodyRow.createDiv({ cls: "ogantt-tbody-viewport" });
+    tbodyViewport.style.width = `${tw}px`;
+    const body = tbodyViewport.createDiv({ cls: "ogantt-tbody" });
+    body.style.height = `${bodyH}px`;
     this.tbodyEl = body;
     for (const row of this.rows) {
       const tr = body.createDiv({ cls: "ogantt-tr" });
@@ -1463,8 +1495,9 @@ export class GanttView extends ItemView {
       }
     }
 
-    // (4) タイムライン SVG / timeline SVG
-    const svgWrap = grid.createDiv({ cls: "ogantt-svgwrap" });
+    // (4) 実スクロール領域＋タイムライン SVG / the real scroll region + timeline SVG
+    const scrollEl = bodyRow.createDiv({ cls: "ogantt-scroll" });
+    const svgWrap = scrollEl.createDiv({ cls: "ogantt-svgwrap" });
     const svg = svgWrap.createSvg("svg", { cls: "ogantt-svg" });
     svg.setAttribute("width", String(width));
     svg.setAttribute("height", String(bodyH));
@@ -1477,6 +1510,42 @@ export class GanttView extends ItemView {
     if (this.progressLine) this.drawProgressLine(svg, width, bodyH);
     this.drawDependencies(svg); // バーの上に描いて矢印を隠さない / on top of bars so arrows stay visible
     svg.appendChild(handlesLayer); // 矢印の上にハンドルを重ねる / handles above arrows
+
+    // (5) 固定側（表ヘッダ・左列）を scrollEl の scrollLeft/scrollTop に transform で追従させる。
+    // scroll イベントは非同期発火なので、初期位置の復元直後は自前で1回同期して1フレームの
+    // ズレ（固定側が古い位置のまま一瞬見える）を防ぐ
+    // sync the pinned side (header/left column) to scrollEl's scrollLeft/scrollTop via transform.
+    // the scroll event fires asynchronously, so sync once by hand right after restoring the initial
+    // position to avoid a one-frame flash of the pinned side sitting at its old offset
+    const sync = () => {
+      axis.style.transform = `translateX(${-scrollEl.scrollLeft}px)`;
+      body.style.transform = `translateY(${-scrollEl.scrollTop}px)`;
+    };
+    scrollEl.addEventListener("scroll", sync, { passive: true });
+    scrollEl.scrollLeft = keepLeft;
+    scrollEl.scrollTop = keepTop;
+    sync();
+
+    // Ctrl/Cmd + ホイールで拡大縮小。修飾なしのホイールは、固定側（表/日付軸）の上でも
+    // scrollEl へ転送して通常のスクロールにする（固定側自体には scrollbar が無いため）
+    // ctrl/cmd + wheel zooms. An unmodified wheel over the pinned side (table/axis) is
+    // forwarded to scrollEl so it still scrolls normally (the pinned side has no scrollbar of its own)
+    main.addEventListener(
+      "wheel",
+      (e: WheelEvent) => {
+        if (e.ctrlKey || e.metaKey) {
+          if (e.deltaY === 0) return;
+          e.preventDefault();
+          this.queueWheelZoom(e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP, e.clientX);
+          return;
+        }
+        if ((e.target as Element).closest(".ogantt-scroll")) return; // ネイティブのスクロールに任せる / let native scrolling handle it
+        e.preventDefault();
+        scrollEl.scrollTop += e.deltaY;
+        scrollEl.scrollLeft += e.deltaX;
+      },
+      { passive: false }
+    );
   }
 
   private xOf(dateStr: string, frac = 0): number {
@@ -2889,6 +2958,26 @@ export class GanttView extends ItemView {
     };
     // repaint はテーブル側では不要（save→refresh で再描画される）/ no chip repaint needed here
     this.openRangePicker(anchor, state, which, () => {}, save);
+  }
+
+  // 表示範囲チップのラベル（設定の日付表示フォーマットに合わせる）/ label for the view-range chip (follows the configured date display format)
+  private formatRangeLabel(r: { start: string; end: string }): string {
+    const fmt = this.plugin.settings.dateFormat;
+    return `${formatDate(r.start, fmt)} – ${formatDate(r.end, fmt)}`;
+  }
+
+  // オプション行の「表示範囲」チップから開く。手動指定した範囲は次の描画からタスクの
+  // 自動計算に優先する（× で解除するまで）/ opened from the options row's "view range" chip;
+  // a manually pinned range overrides the auto-computed one from the next render on (until cleared with ×)
+  private openViewRangePicker(anchor: HTMLElement): void {
+    const state = this.customRange
+      ? { ...this.customRange }
+      : { start: dayToStr(this.range.min), end: dayToStr(this.range.max) };
+    const save = (): void => {
+      this.customRange = state.start && state.end ? { start: state.start, end: state.end } : null;
+      this.rerender();
+    };
+    this.openRangePicker(anchor, state, "start", () => {}, save);
   }
 
   // 範囲カレンダー（開始・終了を1つで指定。月移動は ←→・テーマ追従）
