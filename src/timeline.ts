@@ -183,6 +183,34 @@ export function computeRange(tasks: Task[]): DateRange {
   return { min: Math.min(...days) - 3, max: Math.max(...days) + 7 };
 }
 
+// Hour/Hour6 の目盛りとグリッド幅は日数に比例するため、"いつか"用の遠未来日付
+// （例: 2080-xx-xx）が1件混ざるだけで数万〜数十万要素・数百万pxの描画になり
+// Obsidian が固まる。この2ズームだけ、今日を中心に妥当な範囲へ収める
+// (時刻の無い Day/Week/Month は 1 目盛り/日のままなので影響なし)
+// ticks and grid width at the Hour/Hour6 zooms scale with day count, so a single
+// far-future placeholder date (e.g. a "someday" task dated 2080) balloons them to
+// tens/hundreds of thousands of elements and a multi-million-px grid, hanging Obsidian.
+// clamp only these two zooms to a sane window centered on today (Day/Week/Month stay
+// at one tick per day regardless, so they're unaffected)
+const HOUR_ZOOM_MAX_SPAN_DAYS: Partial<Record<ZoomMode, number>> = { Hour: 120, Hour6: 600 };
+
+export function clampRangeForZoom(range: DateRange, zoom: ZoomMode): DateRange {
+  const cap = HOUR_ZOOM_MAX_SPAN_DAYS[zoom];
+  if (!cap || range.max - range.min <= cap) return range;
+  const anchor = Math.min(Math.max(todayIndex(), range.min), range.max);
+  let min = anchor - Math.floor(cap / 2);
+  let max = min + cap;
+  if (min < range.min) {
+    max += range.min - min;
+    min = range.min;
+  }
+  if (max > range.max) {
+    min -= max - range.max;
+    max = range.max;
+  }
+  return { min, max };
+}
+
 // ── 稲妻線 / progress line ──
 
 // 稲妻線の 1 行分の入力。バーを持たない行（グループ行・日付なし）は startX を省略する

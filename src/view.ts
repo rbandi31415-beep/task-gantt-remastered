@@ -27,6 +27,7 @@ import {
 import {
   DateRange,
   computeRange,
+  clampRangeForZoom,
   dayIndex,
   dayToStr,
   dayFraction,
@@ -219,6 +220,10 @@ export class GanttView extends ItemView {
       window.clearTimeout(this.fitTimer);
       this.fitTimer = null;
     }
+    if (this.wheelZoomRaf != null) {
+      window.cancelAnimationFrame(this.wheelZoomRaf);
+      this.wheelZoomRaf = null;
+    }
     activeDocument.querySelectorAll(".ogantt-cal, .ogantt-colmenu, .ogantt-timepick, .ogantt-datemenu").forEach((e) => e.remove()); // 開いたままのポップオーバーを掃除 / drop any open popover
   }
 
@@ -258,7 +263,7 @@ export class GanttView extends ItemView {
       // 親子ネストはフォルダグループ化のときだけ / nest by parent only when grouping by folder
       this.rows = buildRows(view, this.collapsed, folders, compare, this.groupBy === "folder");
     }
-    this.range = computeRange(view);
+    this.range = clampRangeForZoom(computeRange(view), this.zoom);
     this.ppd = this.computePpd();
     const titleEl = this.contentEl.querySelector(".ogantt-title");
     if (titleEl) titleEl.setText(this.folder || "(vault root)");
@@ -279,7 +284,7 @@ export class GanttView extends ItemView {
       (e: WheelEvent) => {
         if (!(e.ctrlKey || e.metaKey) || e.deltaY === 0) return;
         e.preventDefault();
-        this.zoomBy(e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP, e.clientX);
+        this.queueWheelZoom(e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP, e.clientX);
       },
       { passive: false }
     );
@@ -315,6 +320,29 @@ export class GanttView extends ItemView {
       this.zoomFactor = next;
     }
     this.rerender();
+  }
+
+  // トラックパッドの ctrl+wheel は1秒に何十回も発火し、そのたびに rerender()
+  // （テーブル・SVG全体の再構築）すると処理が追いつかず固まる。1 アニメーション
+  // フレームぶんをまとめて 1 回の zoomBy にする / trackpad ctrl+wheel can fire dozens
+  // of times a second; calling rerender() (a full table + SVG rebuild) on every one
+  // backs up faster than it can drain and hangs the view. Coalesce everything within
+  // one animation frame into a single zoomBy call
+  private pendingWheelZoom: { mult: number; anchorClientX: number } | null = null;
+  private wheelZoomRaf: number | null = null;
+
+  private queueWheelZoom(mult: number, anchorClientX: number): void {
+    this.pendingWheelZoom = {
+      mult: (this.pendingWheelZoom?.mult ?? 1) * mult,
+      anchorClientX,
+    };
+    if (this.wheelZoomRaf != null) return;
+    this.wheelZoomRaf = window.requestAnimationFrame(() => {
+      this.wheelZoomRaf = null;
+      const pending = this.pendingWheelZoom;
+      this.pendingWheelZoom = null;
+      if (pending) this.zoomBy(pending.mult, pending.anchorClientX);
+    });
   }
 
   // ----- テーブル列 / table columns -----
