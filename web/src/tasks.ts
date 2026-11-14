@@ -12,7 +12,8 @@ export const STATUSES: StatusDef[] = [
 ];
 configureCompat(true, STATUSES, "status");
 
-export const KEYS = { start: "scheduled", end: "due", status: "status", parent: "projects", after: "blockedBy", milestone: "milestone" };
+// bars run startDate → due; TaskNotes' scheduled is a calendar slot and is only displayed
+export const KEYS = { start: "startDate", scheduled: "scheduled", end: "due", status: "status", parent: "projects", after: "blockedBy", milestone: "milestone" };
 
 export interface RemoteFile {
   rel: string;
@@ -29,6 +30,7 @@ export interface WebTask {
   startTime?: string;
   end?: string;
   endTime?: string;
+  scheduled?: string; // TaskNotes calendar slot, shown but not used for the bar
   milestone: boolean;
   dueOnly: boolean; // only a due date (drawn on its due date, like the plugin)
   parent?: string; // rel of parent task
@@ -97,6 +99,7 @@ export function parseTasks(files: RemoteFile[]): WebTask[] {
       rel: f.rel, sha: f.sha, name: basename(f.rel),
       status: fm[KEYS.status] != null ? String(fm[KEYS.status]) : undefined,
       start, startTime, end, endTime: pe?.time, milestone, dueOnly,
+      scheduled: fm[KEYS.scheduled] != null && fm[KEYS.scheduled] !== "" ? String(fm[KEYS.scheduled]) : undefined,
       deps: [], body, fm,
     };
   });
@@ -238,7 +241,7 @@ export function newNote(parentRel: string | undefined, start: string, now = new 
   const iso = `${today(now)}T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}.${String(now.getMilliseconds()).padStart(3, "0")}${off < 0 ? "-" : "+"}${pad(Math.floor(Math.abs(off) / 60))}:${pad(Math.abs(off) % 60)}`;
   doc.set("status", "open");
   doc.set("priority", "normal");
-  doc.set("scheduled", start);
+  doc.set(KEYS.start, start);
   doc.set("tags", doc.createNode(["task"]));
   if (parentRel) doc.set("projects", doc.createNode([wiki(parentRel)]));
   doc.set("dateCreated", iso);

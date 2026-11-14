@@ -1,5 +1,5 @@
 import { Plugin, WorkspaceLeaf, TFolder, TFile, Menu, TAbstractFile, Notice } from "obsidian";
-import { GanttSettings, DEFAULT_SETTINGS, GanttSettingTab } from "./settings";
+import { GanttSettings, DEFAULT_SETTINGS, GanttSettingTab, SETTINGS_VERSION } from "./settings";
 import { GanttView } from "./view";
 import { VIEW_TYPE_GANTT, GanttViewState } from "./types";
 import { t } from "./i18n";
@@ -60,6 +60,16 @@ export default class GanttPlugin extends Plugin {
       (msg) => new Notice(msg, 8000)
     );
     this.shareSyncer.onStatus = (text) => shareStatus.setText(text ? `Shared tasks: ${text}` : "");
+    this.addCommand({
+      id: "open-shared-folder",
+      name: "Open shared folder Gantt",
+      checkCallback: (checking) => {
+        const f = this.settings.share.folder;
+        if (!f) return false;
+        if (!checking) void this.activateView(f);
+        return true;
+      },
+    });
     this.addCommand({
       id: "share-sync-now",
       name: "Sync shared folder now",
@@ -127,6 +137,8 @@ export default class GanttPlugin extends Plugin {
 
   // フォーカス中フォルダを推定 / best-effort current folder
   private currentFolder(): string {
+    // 0. 既定フォルダ固定（設定）/ pinned default folder (setting)
+    if (this.settings.openDefaultFolder !== false && this.settings.rootFolder) return this.settings.rootFolder;
     // 1. ファイルエクスプローラで選択中のフォルダ / folder selected in the file explorer
     const explorer = this.app.workspace.getLeavesOfType("file-explorer")[0];
     const view = explorer?.view as unknown as { tree?: { focusedItem?: { file?: TAbstractFile } } } | undefined;
@@ -182,7 +194,35 @@ export default class GanttPlugin extends Plugin {
     this.settings.gcal.state = st;
     this.settings.share = Object.assign({}, DEFAULT_SHARE, this.settings.share);
     this.settings.share.base = { ...(this.settings.share.base ?? {}) };
+    this.migrateSettings(data?.settingsVersion ?? 0);
     this.applyCompat();
+  }
+
+  // 設定の一回限りの移行 / one-time settings migrations
+  private migrateSettings(from: number): void {
+    const s = this.settings;
+    if (from < 3) {
+      // TaskNotes の scheduled は「カレンダーに置く時刻」でありプロジェクトの開始日ではない。
+      // 互換モードではバーを専用の startDate → due で描き、scheduled には触れない
+      // TaskNotes' scheduled is a calendar slot, not a project start. In compat mode bars get
+      // their own startDate → due span and scheduled is left alone for the calendar.
+      if (this.compatOn() && s.keys.start === "scheduled") {
+        s.keys.start = "startDate";
+        s.barSpan = "dates";
+        if (s.defaultZoom === "Hour" || s.defaultZoom === "Hour6") s.defaultZoom = "Week";
+        // 共有フォルダがあればそれを既定にする（全タスク読み込みを避ける）/ default to the shared folder if there is one
+        if (s.share.enabled && s.share.folder) s.rootFolder = s.share.folder;
+      }
+      s.openDefaultFolder = s.openDefaultFolder ?? true;
+    }
+    s.settingsVersion = SETTINGS_VERSION;
+    if (from < SETTINGS_VERSION) void this.saveData(s);
+  }
+
+  private compatOn(): boolean {
+    const mode = this.settings.taskNotesCompat ?? "auto";
+    const plugins = (this.app as unknown as { plugins?: { enabledPlugins?: Set<string> } }).plugins;
+    return mode === "on" || (mode === "auto" && !!plugins?.enabledPlugins?.has("tasknotes"));
   }
 
   restartShare(): void {
@@ -196,10 +236,7 @@ export default class GanttPlugin extends Plugin {
   // TaskNotes 互換を model へ反映。enabledPlugins はコミュニティプラグイン設定由来なので読込順に依らない
   // push TaskNotes compat into the model; enabledPlugins comes from the community-plugins config, so load order doesn't matter
   applyCompat(): void {
-    const mode = this.settings.taskNotesCompat ?? "auto";
-    const plugins = (this.app as unknown as { plugins?: { enabledPlugins?: Set<string> } }).plugins;
-    const on = mode === "on" || (mode === "auto" && !!plugins?.enabledPlugins?.has("tasknotes"));
-    configureCompat(on, this.settings.statuses, this.settings.keys.status);
+    configureCompat(this.compatOn(), this.settings.statuses, this.settings.keys.status);
   }
 
   async saveSettings(): Promise<void> {

@@ -289,6 +289,10 @@ function renderPanel() {
   const due = el("input", { type: "date", name: "due" }) as HTMLInputElement;
   due.value = t.fm[KEYS.end] ? t.end ?? "" : "";
   field("Due", due);
+  if (t.scheduled) {
+    const cal = el("p", { class: "cal" }, `On calendar (scheduled): ${t.scheduled.replace("T", " ")}`);
+    f.append(cal);
+  }
   const parent = el("select", { name: "parent" });
   parent.append(el("option", { value: "" }, "— none —"));
   const descendants = new Set<string>();

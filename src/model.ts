@@ -214,6 +214,13 @@ function resolveLink(app: App, raw: string, sourcePath: string): TFile | null {
   return app.metadataCache.getFirstLinkpathDest(inner, sourcePath);
 }
 
+// パスが表示スコープ（フォルダ）内か。"" や "/" は Vault 全体 / is a path inside the scoped folder ("" or "/" = whole vault)
+export function inScope(folder: string, path: string): boolean {
+  const f = (folder || "").replace(/^\/+|\/+$/g, "");
+  if (!f) return true;
+  return path === f || path.startsWith(f + "/");
+}
+
 // 指定フォルダ配下のタスクを収集（folderPath="" は Vault ルート）/ collect tasks under a scoped folder
 export function collectTasks(app: App, settings: GanttSettings, folderPath: string): Task[] {
   const rootPath = normalizePath(folderPath || "/");

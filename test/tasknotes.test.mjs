@@ -3,7 +3,7 @@
 import { TFile, TFolder } from "./obsidian-stub.mjs";
 import {
   configureCompat, parseDepEntry, makeDepEntry, combineDateTime, writeTz, applyTaskNotesTouch,
-  collectTasks, addDependency, removeDependency, reparentTask, writeField, writeDates,
+  collectTasks, addDependency, removeDependency, reparentTask, writeField, writeDates, inScope,
 } from "./model.mjs";
 
 let pass = 0;
@@ -74,6 +74,10 @@ const settings = {
 };
 
 // ── 純関数 / pure helpers ──
+check("inScope: inside folder", inScope("TaskNotes/Tasks/Dermaglow", "TaskNotes/Tasks/Dermaglow/CAD.md"));
+check("inScope: sibling with same prefix is out", !inScope("TaskNotes/Tasks/Dermaglow", "TaskNotes/Tasks/Dermaglow Personal/x.md"));
+check("inScope: parent folder note is out", !inScope("TaskNotes/Tasks/Dermaglow", "TaskNotes/Tasks/Journal.md"));
+check("inScope: vault root sees everything", inScope("", "a/b.md") && inScope("/", "x.md"));
 check("parseDepEntry: TaskNotes object", same(parseDepEntry({ uid: "[[A]]", reltype: "FINISHTOSTART" }), { type: "FS", link: "[[A]]" }));
 check("parseDepEntry: STARTTOSTART -> SS", parseDepEntry({ uid: "[[A]]", reltype: "starttostart" }).type === "SS");
 check("parseDepEntry: STARTTOFINISH falls back to FS", parseDepEntry({ uid: "[[A]]", reltype: "STARTTOFINISH" }).type === "FS");

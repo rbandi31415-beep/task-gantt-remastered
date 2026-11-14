@@ -16,7 +16,7 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const BOM = `---
 status: in-progress
 priority: normal
-scheduled: 2026-11-13T22:00
+startDate: 2026-11-13T22:00
 projects:
   - "[[Some reference note]]"
   - "[[Sprint 1 TWL sensor]]"
@@ -35,7 +35,7 @@ Body line one.
 `;
 const files = [
   { rel: "Preliminary BOM.md", sha: "a1", text: BOM },
-  { rel: "Search for sensors.md", sha: "a2", text: "---\nstatus: open\nscheduled: 2026-11-11\ndue: 2026-11-12\nprojects:\n  - \"[[Sprint 1 TWL sensor]]\"\n---\n" },
+  { rel: "Search for sensors.md", sha: "a2", text: "---\nstatus: open\nstartDate: 2026-11-11\ndue: 2026-11-12\nprojects:\n  - \"[[Sprint 1 TWL sensor]]\"\n---\n" },
   { rel: "Sprint 1 TWL sensor.md", sha: "a3", text: "---\nstatus: open\n---\n" },
   { rel: "CAD v1.md", sha: "a4", text: "---\nstatus: open\ndue: 2026-11-20\nprojects:\n  - \"[[Sprint 1 TWL sensor]]\"\nblockedBy:\n  - uid: \"[[Preliminary BOM]]\"\n    reltype: STARTTOSTART\n---\n" },
   { rel: "Demo.md", sha: "a5", text: "---\nstatus: done\ndue: 2026-12-01\nmilestone: true\n---\n" },
@@ -62,7 +62,7 @@ check("rows: hide done drops done tasks", !buildWebRows(tasks, new Set(), true).
 const resolve = makeResolver(files.map((f) => f.rel));
 const bom = T("Preliminary BOM");
 let out = editNote(BOM, (fm) => setDates(fm, bom, "2026-11-15", "2026-11-15"));
-check("edit dates: time of day kept, no offset", out.includes("scheduled: 2026-11-15T22:00\n"));
+check("edit dates: time of day kept, no offset", out.includes("startDate: 2026-11-15T22:00\n"));
 check("edit dates: one-day task gets no due date", !/\ndue:/.test(out));
 check("edit: untouched keys keep order and formatting", splitNote(out).yaml.split("\n").slice(0, 7).join("\n") === splitNote(BOM).yaml.split("\n").slice(0, 7).join("\n").replace("2026-11-13T22:00", "2026-11-15T22:00"));
 check("edit: dependency gap untouched", out.includes("gap: 1d"));
@@ -81,7 +81,14 @@ out = editNote(BOM, (fm) => setDeps(fm, [], resolve));
 check("set deps: removing all deletes the key", !out.includes("blockedBy"));
 const cad = T("CAD v1");
 out = editNote(files[3].text, (fm) => setDates(fm, cad, "2026-11-22", "2026-11-22"));
-check("due-only task stays due-only when dragged", out.includes("due: 2026-11-22") && !out.includes("scheduled"));
+const both = "---\nstatus: open\nstartDate: 2026-11-10\ndue: 2026-11-14\nscheduled: 2026-11-12T15:00\n---\n";
+const bt = parseTasks([{ rel: "Both.md", sha: "x", text: both }])[0];
+check("scheduled is shown but not the bar", bt.start === "2026-11-10" && bt.scheduled === "2026-11-12T15:00");
+const moved = editNote(both, (fm) => setDates(fm, bt, "2026-11-11", "2026-11-15"));
+check("moving a bar never touches scheduled", moved.includes("scheduled: 2026-11-12T15:00") && moved.includes("startDate: 2026-11-11") && moved.includes("due: 2026-11-15"));
+const calOnly = parseTasks([{ rel: "Cal.md", sha: "x", text: "---\nstatus: open\nscheduled: 2026-11-12T15:00\n---\n" }])[0];
+check("scheduled alone draws no bar", !calOnly.start && !calOnly.end);
+check("due-only task stays due-only when dragged", out.includes("due: 2026-11-22") && !out.includes("startDate"));
 const fresh = newNote("Sprint 1 TWL sensor.md", "2026-11-14", new Date(2026, 10, 14, 9, 0, 0));
 const fp = parseTasks([{ rel: "Fresh.md", sha: "x", text: fresh }, files[2]])[0];
 check("new note: TaskNotes shape", fresh.includes("status: open") && fresh.includes("tags:\n  - task") && fp.parent === "Sprint 1 TWL sensor.md" && fp.start === "2026-11-14");

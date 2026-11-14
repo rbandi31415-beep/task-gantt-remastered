@@ -61,6 +61,10 @@ const TZ_CITIES: [string, string][] = [
 // プラグイン設定 / Plugin settings
 export interface GanttSettings {
   rootFolder: string; // 集計する親フォルダ / parent folder to aggregate
+  // リボン/コマンドで常に既定フォルダを開く（false=アクティブノートのフォルダ）
+  // ribbon/command always open the default folder (false = the active note's folder)
+  openDefaultFolder: boolean;
+  settingsVersion: number; // 設定移行の版 / settings migration version
   recurse: boolean; // サブフォルダを再帰的に辿るか / recurse into subfolders
   statuses: StatusDef[];
   defaultZoom: ZoomMode;
@@ -149,8 +153,12 @@ export interface GcalSyncState {
   link?: string; // イベントの htmlLink / the event's htmlLink
 }
 
+export const SETTINGS_VERSION = 3;
+
 export const DEFAULT_SETTINGS: GanttSettings = {
   rootFolder: "",
+  openDefaultFolder: true,
+  settingsVersion: SETTINGS_VERSION,
   recurse: true,
   statuses: [
     { id: "todo", label: "To do", color: "#9aa0a6", group: "active" },
@@ -284,6 +292,11 @@ export class GanttSettingTab extends PluginSettingTab {
         this.save();
       })
     );
+  }
+
+  private ctlOpenDefault(setting: Setting): void {
+    const s = this.plugin.settings;
+    setting.addToggle((t) => t.setValue(s.openDefaultFolder).onChange((v) => { s.openDefaultFolder = v; this.save(); }));
   }
 
   private ctlRecurse(setting: Setting): void {
@@ -778,6 +791,7 @@ export class GanttSettingTab extends PluginSettingTab {
 
     const items: SettingDefinitionItem[] = [
       { name: tr().setDefaultFolderName, desc: tr().setDefaultFolderDesc, render: (x) => this.ctlRootFolder(x) },
+      { name: "Always open the default folder", desc: "The ribbon icon and Open Gantt command always open the default folder. Off: they open the folder of the note you're in. Right-click a folder to open any other folder.", render: (x) => this.ctlOpenDefault(x) },
       { name: tr().setRecurseName, desc: tr().setRecurseDesc, render: (x) => this.ctlRecurse(x) },
       { name: tr().setDefaultZoomName, render: (x) => this.ctlZoom(x) },
       {
@@ -992,6 +1006,7 @@ export class GanttSettingTab extends PluginSettingTab {
     const s = this.plugin.settings;
 
     this.ctlRootFolder(new Setting(containerEl).setName(tr().setDefaultFolderName).setDesc(tr().setDefaultFolderDesc));
+    this.ctlOpenDefault(new Setting(containerEl).setName("Always open the default folder").setDesc("The ribbon icon and Open Gantt command always open the default folder. Off: they open the folder of the note you're in. Right-click a folder to open any other folder."));
     this.ctlRecurse(new Setting(containerEl).setName(tr().setRecurseName).setDesc(tr().setRecurseDesc));
     this.ctlZoom(new Setting(containerEl).setName(tr().setDefaultZoomName));
     this.ctlBarSpan(

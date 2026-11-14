@@ -11,6 +11,7 @@ import {
   writeDates,
   combineDateTime,
   writeTz,
+  inScope,
   writeField,
   writeBody,
   renameTask,
@@ -145,12 +146,28 @@ export class GanttView extends ItemView {
   async onOpen(): Promise<void> {
     this.buildSkeleton();
     await this.refresh();
-    // メタデータ更新で自動再描画（ガント部のみ）/ re-render the grid when frontmatter changes
-    this.registerEvent(this.app.metadataCache.on("changed", () => this.scheduleRefresh()));
-    // ファイルの作成/削除/リネーム（フォルダ移動含む）でも自動再描画 / also re-render on create / delete / rename (incl. folder moves)
-    this.registerEvent(this.app.vault.on("create", () => this.scheduleRefresh()));
-    this.registerEvent(this.app.vault.on("delete", () => this.scheduleRefresh()));
-    this.registerEvent(this.app.vault.on("rename", () => this.scheduleRefresh()));
+    // 表示中フォルダ内の変更だけで再描画（Vault 全体の変更では描き直さない）
+    // re-render only for changes inside the scoped folder, not for every change in the vault
+    this.registerEvent(this.app.metadataCache.on("changed", (file) => this.onPathChanged(file.path)));
+    this.registerEvent(this.app.vault.on("create", (file) => this.onPathChanged(file.path)));
+    this.registerEvent(this.app.vault.on("delete", (file) => this.onPathChanged(file.path)));
+    this.registerEvent(
+      this.app.vault.on("rename", (file, oldPath) => {
+        this.onPathChanged(oldPath);
+        this.onPathChanged(file.path);
+      })
+    );
+    // 非表示中に溜まった変更は、表示に戻ったときに 1 回だけ反映 / catch up once when the view becomes visible again
+    this.registerEvent(
+      this.app.workspace.on("layout-change", () => {
+        if (this.dirty && this.isVisible()) this.scheduleRefresh();
+      })
+    );
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", () => {
+        if (this.dirty && this.isVisible()) this.scheduleRefresh();
+      })
+    );
     // Ctrl/Cmd+Z で取り消し（入力欄にフォーカス中はネイティブ undo を優先）
     // Ctrl/Cmd+Z to undo (defer to native undo while an input is focused)
     this.registerDomEvent(window, "keydown", (e: KeyboardEvent) => {
@@ -208,6 +225,22 @@ export class GanttView extends ItemView {
   }
 
   private refreshTimer: number | null = null;
+  private dirty = false; // 非表示中に変更があった / changed while hidden
+
+  private isVisible(): boolean {
+    return this.containerEl.isShown();
+  }
+
+  // 変更パスが表示中フォルダ内か（Vault ルート表示なら常に真）/ is a changed path inside the scoped folder?
+  private onPathChanged(path: string): void {
+    if (!inScope(this.folder, path)) return;
+    if (!this.isVisible()) {
+      this.dirty = true; // 隠れている間は描き直さない / don't rebuild while hidden
+      return;
+    }
+    this.scheduleRefresh();
+  }
+
   private scheduleRefresh(): void {
     if (this.refreshTimer != null) window.clearTimeout(this.refreshTimer);
     this.refreshTimer = window.setTimeout(() => void this.refresh(), 300);
@@ -232,6 +265,7 @@ export class GanttView extends ItemView {
 
   // ディスクから集計し直して再描画 / re-collect from disk, then render
   async refresh(): Promise<void> {
+    this.dirty = false;
     if (!this.gridHost) this.buildSkeleton();
     this.tasks = collectTasks(this.app, this.plugin.settings, this.folder);
     this.allFolders = collectFolders(this.app, this.plugin.settings, this.folder);
