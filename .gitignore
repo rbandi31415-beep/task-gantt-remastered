@@ -23,3 +23,5 @@ sample files/
 docs/agent-team.md
 test/share-core.mjs
 test/share-sync.mjs
+test/web-tasks.mjs
+test/web-fn.mjs

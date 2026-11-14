@@ -1,0 +1,14 @@
+# Cloudflare Pages project for the shared Dermaglow Gantt.
+# Deploy from this folder:  npx wrangler pages deploy
+name = "dermaglow-gantt"
+pages_build_output_dir = "public"
+compatibility_date = "2026-11-01"
+
+[vars]
+REPO = "rbandi31415-beep/dermaglow-tasks"
+BRANCH = "main"
+# Set these in the Cloudflare dashboard (Settings → Variables and secrets), not here:
+#   GITHUB_TOKEN        secret: fine-grained token, Contents read/write on dermaglow-tasks only
+#   ALLOWED_EMAILS      secret: comma-separated, e.g. you@example.com,david@example.com
+#   ACCESS_TEAM_DOMAIN  e.g. yourteam.cloudflareaccess.com
+#   ACCESS_AUD          the Access application's "Application Audience (AUD) Tag"

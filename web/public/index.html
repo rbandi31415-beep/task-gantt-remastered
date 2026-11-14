@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Dermaglow tasks</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+</head>
+<body>
+  <header>
+    <h1>Dermaglow tasks</h1>
+    <div class="zoom" role="group" aria-label="Zoom">
+      <button id="z-day">Day</button><button id="z-week">Week</button><button id="z-month">Month</button>
+    </div>
+    <button id="today">Today</button>
+    <label class="chk"><input type="checkbox" id="hide-done"> Hide done</label>
+    <span class="grow"></span>
+    <span id="updated" class="muted"></span>
+    <button id="refresh" aria-label="Reload tasks">Reload</button>
+    <button id="new" class="primary">+ New task</button>
+    <span id="me" class="muted"></span>
+  </header>
+  <main id="main">
+    <div id="scroller">
+      <div id="table"></div>
+      <div id="chartwrap"><div id="chart"></div></div>
+    </div>
+    <aside id="panel" aria-label="Task details"></aside>
+  </main>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

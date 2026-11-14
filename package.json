@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-    "test": "esbuild src/model.ts --bundle --format=esm --outfile=test/model.mjs --alias:obsidian=./test/obsidian-stub.mjs --log-level=warning && esbuild src/gcal/map.ts --bundle --format=esm --outfile=test/gcal-map.mjs --alias:obsidian=./test/obsidian-stub.mjs --log-level=warning && esbuild src/timeline.ts --bundle --format=esm --outfile=test/timeline.mjs --alias:obsidian=./test/obsidian-stub.mjs --log-level=warning && esbuild src/share/core.ts --bundle --format=esm --outfile=test/share-core.mjs --log-level=warning && esbuild src/share/sync.ts --bundle --format=esm --outfile=test/share-sync.mjs --alias:obsidian=./test/obsidian-stub.mjs --log-level=warning && node test/model.test.mjs && node test/gcal.test.mjs && node test/timeline.test.mjs && node test/tasknotes.test.mjs && node test/share.test.mjs"
+    "test": "esbuild src/model.ts --bundle --format=esm --outfile=test/model.mjs --alias:obsidian=./test/obsidian-stub.mjs --log-level=warning && esbuild src/gcal/map.ts --bundle --format=esm --outfile=test/gcal-map.mjs --alias:obsidian=./test/obsidian-stub.mjs --log-level=warning && esbuild src/timeline.ts --bundle --format=esm --outfile=test/timeline.mjs --alias:obsidian=./test/obsidian-stub.mjs --log-level=warning && esbuild src/share/core.ts --bundle --format=esm --outfile=test/share-core.mjs --log-level=warning && esbuild src/share/sync.ts --bundle --format=esm --outfile=test/share-sync.mjs --alias:obsidian=./test/obsidian-stub.mjs --log-level=warning && esbuild web/src/tasks.ts --bundle --format=esm --outfile=test/web-tasks.mjs --alias:obsidian=./web/obsidian-shim.ts --log-level=warning && esbuild \"web/functions/api/[[path]].ts\" --bundle --format=esm --outfile=test/web-fn.mjs --log-level=warning && node test/model.test.mjs && node test/gcal.test.mjs && node test/timeline.test.mjs && node test/tasknotes.test.mjs && node test/share.test.mjs && node test/web.test.mjs",
+    "build:web": "esbuild web/src/app.ts --bundle --format=iife --target=es2020 --minify --outfile=web/public/app.js --alias:obsidian=./web/obsidian-shim.ts"
   },
   "keywords": [
     "obsidian",
@@ -20,7 +21,7 @@
     "esbuild": "^0.20.0",
     "obsidian": "latest",
     "tslib": "^2.6.2",
-    "typescript": "^5.4.0"
-  },
-  "dependencies": {}
+    "typescript": "^5.4.0",
+    "yaml": "^2.9.1"
+  }
 }

@@ -47,7 +47,7 @@ export async function gitBlobSha(bytes: Uint8Array): Promise<string> {
   const buf = new Uint8Array(header.length + bytes.length);
   buf.set(header, 0);
   buf.set(bytes, header.length);
-  const digest = await crypto.subtle.digest("SHA-1", buf);
+  const digest = await crypto.subtle.digest("SHA-1", buf as BufferSource);
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
