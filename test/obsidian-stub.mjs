@@ -11,3 +11,7 @@ export function normalizePath(p) {
 export function getAllTags() {
   return null;
 }
+// 共有同期テストは http を注入するので未使用 / unused: share tests inject their own http
+export async function requestUrl() {
+  throw new Error("requestUrl not available in tests");
+}

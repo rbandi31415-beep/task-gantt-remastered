@@ -6,9 +6,14 @@
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-    "test": "esbuild src/model.ts --bundle --format=esm --outfile=test/model.mjs --alias:obsidian=./test/obsidian-stub.mjs --log-level=warning && esbuild src/gcal/map.ts --bundle --format=esm --outfile=test/gcal-map.mjs --alias:obsidian=./test/obsidian-stub.mjs --log-level=warning && esbuild src/timeline.ts --bundle --format=esm --outfile=test/timeline.mjs --alias:obsidian=./test/obsidian-stub.mjs --log-level=warning && node test/model.test.mjs && node test/gcal.test.mjs && node test/timeline.test.mjs && node test/tasknotes.test.mjs"
+    "test": "esbuild src/model.ts --bundle --format=esm --outfile=test/model.mjs --alias:obsidian=./test/obsidian-stub.mjs --log-level=warning && esbuild src/gcal/map.ts --bundle --format=esm --outfile=test/gcal-map.mjs --alias:obsidian=./test/obsidian-stub.mjs --log-level=warning && esbuild src/timeline.ts --bundle --format=esm --outfile=test/timeline.mjs --alias:obsidian=./test/obsidian-stub.mjs --log-level=warning && esbuild src/share/core.ts --bundle --format=esm --outfile=test/share-core.mjs --log-level=warning && esbuild src/share/sync.ts --bundle --format=esm --outfile=test/share-sync.mjs --alias:obsidian=./test/obsidian-stub.mjs --log-level=warning && node test/model.test.mjs && node test/gcal.test.mjs && node test/timeline.test.mjs && node test/tasknotes.test.mjs && node test/share.test.mjs"
   },
-  "keywords": ["obsidian", "gantt", "project-management", "timeline"],
+  "keywords": [
+    "obsidian",
+    "gantt",
+    "project-management",
+    "timeline"
+  ],
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^20.11.0",

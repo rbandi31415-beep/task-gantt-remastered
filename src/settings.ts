@@ -14,6 +14,7 @@ import { LEADS, leadLabel, sendTestNotification } from "./notify";
 import { connectGoogle, disconnectGoogle, isConnected } from "./gcal/auth";
 import { listCalendars } from "./gcal/api";
 import { syncGcal } from "./gcal/sync";
+import { ShareSettings, DEFAULT_SHARE, loadToken, saveToken } from "./share/sync";
 
 // タイムゾーン一覧（実在するオフセットのみ・代表都市付き）/ timezone list (real offsets only, with representative cities)
 const TZ_CITIES: [string, string][] = [
@@ -120,6 +121,8 @@ export interface GanttSettings {
   defaultDurationMin: number; // 見積りが無いタスクのバー長（分）/ bar length for tasks with no estimate (minutes)
   // TaskNotes 互換：auto=TaskNotes が有効なら ON / TaskNotes compatibility: auto = on when TaskNotes is enabled
   taskNotesCompat: "auto" | "on" | "off";
+  // 共有フォルダの GitHub 同期 / GitHub sync for one shared folder
+  share: ShareSettings;
   // フロントマターのキー名（プロジェクトに合わせて変更可）/ frontmatter key names
   keys: {
     start: string;
@@ -201,6 +204,7 @@ export const DEFAULT_SETTINGS: GanttSettings = {
   barSpan: "dates",
   defaultDurationMin: 60,
   taskNotesCompat: "auto",
+  share: DEFAULT_SHARE,
   keys: {
     start: "start",
     end: "end",
@@ -215,6 +219,13 @@ export const DEFAULT_SETTINGS: GanttSettings = {
     gcal: "gcal",
   },
 };
+
+
+const SHARE_DESC =
+  "Mirror one folder to a private GitHub repo so a collaborator can see and edit those tasks (for example in the web Gantt). Nothing outside the folder is ever read or uploaded.";
+const SHARE_FOLDER_DESC = "Vault folder to share. Only Markdown files inside it are synced; the vault root can't be shared.";
+const SHARE_TOKEN_DESC =
+  "Fine-grained token with Contents read/write on that one repository. Stored on this device only, not in the vault.";
 
 // 設定タブは従来の display() で描画する。後継の getSettingDefinitions() は Obsidian 1.13.0
 // （現在 Early Access）専用で、採用すると安定版 1.12.x では設定タブが表示されなくなるため、
@@ -278,6 +289,82 @@ export class GanttSettingTab extends PluginSettingTab {
   private ctlRecurse(setting: Setting): void {
     const s = this.plugin.settings;
     setting.addToggle((t) => t.setValue(s.recurse).onChange((v) => { s.recurse = v; this.save(); }));
+  }
+
+  // ── 共有フォルダ（GitHub）/ shared folder (GitHub) ──
+  private shareDesc(): string {
+    const sh = this.plugin.settings.share;
+    if (sh.lastError) return `Last sync failed: ${sh.lastError}`;
+    if (sh.lastSync) return `Last synced ${new Date(sh.lastSync).toLocaleString()}`;
+    return "Not synced yet.";
+  }
+  private ctlShareEnabled(setting: Setting): void {
+    const sh = this.plugin.settings.share;
+    setting.addToggle((t) =>
+      t.setValue(sh.enabled).onChange((v) => {
+        sh.enabled = v;
+        this.save();
+        this.plugin.restartShare();
+      })
+    );
+  }
+  private ctlShareText(setting: Setting, key: "folder" | "repo" | "branch", placeholder: string): void {
+    const sh = this.plugin.settings.share;
+    setting.addText((t) =>
+      t
+        .setPlaceholder(placeholder)
+        .setValue(sh[key])
+        .onChange((v) => {
+          const val = v.trim();
+          // 共有先が変わったら同期基準をリセット（別リポジトリの状態を混ぜない）
+          // a different target resets the sync baseline (never mix state from another repo/folder)
+          if (sh[key] !== val) sh.base = {};
+          sh[key] = val;
+          this.save();
+        })
+    );
+  }
+  private ctlShareToken(setting: Setting): void {
+    setting.addText((t) => {
+      t.inputEl.type = "password";
+      t.setPlaceholder("github_pat_…")
+        .setValue(loadToken(this.app))
+        .onChange((v) => saveToken(this.app, v.trim()));
+    });
+  }
+  private ctlShareInterval(setting: Setting): void {
+    const sh = this.plugin.settings.share;
+    setting.addText((t) =>
+      t
+        .setPlaceholder("2")
+        .setValue(String(sh.intervalMin))
+        .onChange((v) => {
+          const n = Number(v);
+          if (Number.isFinite(n) && n >= 1) {
+            sh.intervalMin = Math.round(n);
+            this.save();
+            this.plugin.restartShare();
+          }
+        })
+    );
+  }
+  private ctlShareSyncNow(setting: Setting): void {
+    setting.addButton((b) =>
+      b.setButtonText("Sync now").onClick(async () => {
+        await this.plugin.shareSyncer?.run(true);
+        setting.setDesc(this.shareDesc());
+      })
+    );
+  }
+  private drawShare(containerEl: HTMLElement): void {
+    new Setting(containerEl).setName("Shared folder (GitHub)").setDesc(SHARE_DESC).setHeading();
+    this.ctlShareEnabled(new Setting(containerEl).setName("Sync this folder"));
+    this.ctlShareText(new Setting(containerEl).setName("Folder").setDesc(SHARE_FOLDER_DESC), "folder", "TaskNotes/Tasks/Dermaglow");
+    this.ctlShareText(new Setting(containerEl).setName("Repository").setDesc("owner/name of a private repo"), "repo", "you/shared-tasks");
+    this.ctlShareText(new Setting(containerEl).setName("Branch"), "branch", "main");
+    this.ctlShareToken(new Setting(containerEl).setName("GitHub token").setDesc(SHARE_TOKEN_DESC));
+    this.ctlShareInterval(new Setting(containerEl).setName("Sync every (minutes)"));
+    this.ctlShareSyncNow(new Setting(containerEl).setName("Status").setDesc(this.shareDesc()));
   }
 
   // TaskNotes 互換モード / TaskNotes compatibility mode
@@ -805,6 +892,20 @@ export class GanttSettingTab extends PluginSettingTab {
           render: (x) => this.ctlLeadToggle(x, lead.id),
         })),
       },
+      {
+        type: "group",
+        heading: "Shared folder (GitHub)",
+        items: [
+          { name: "Shared folder (GitHub)", desc: SHARE_DESC },
+          { name: "Sync this folder", render: (x) => this.ctlShareEnabled(x) },
+          { name: "Folder", desc: SHARE_FOLDER_DESC, render: (x) => this.ctlShareText(x, "folder", "TaskNotes/Tasks/Dermaglow") },
+          { name: "Repository", desc: "owner/name of a private repo", render: (x) => this.ctlShareText(x, "repo", "you/shared-tasks") },
+          { name: "Branch", render: (x) => this.ctlShareText(x, "branch", "main") },
+          { name: "GitHub token", desc: SHARE_TOKEN_DESC, render: (x) => this.ctlShareToken(x) },
+          { name: "Sync every (minutes)", render: (x) => this.ctlShareInterval(x) },
+          { name: "Status", desc: this.shareDesc(), render: (x) => this.ctlShareSyncNow(x) },
+        ],
+      },
       // Google カレンダー同期。接続後にだけ意味を持つ行は visible で出し分ける
       // Google Calendar sync; rows that only matter once connected are gated with `visible`
       {
@@ -965,6 +1066,9 @@ export class GanttSettingTab extends PluginSettingTab {
     for (const lead of LEADS) {
       this.ctlLeadToggle(new Setting(containerEl).setName(leadLabel(lead.id)), lead.id);
     }
+
+    // 共有フォルダ / shared folder
+    this.drawShare(containerEl);
 
     // Google カレンダー同期 / Google Calendar sync
     this.drawGcal(containerEl);

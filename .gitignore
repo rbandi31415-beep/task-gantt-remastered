@@ -21,3 +21,5 @@ sample files/
 .claude/
 .mcp.json
 docs/agent-team.md
+test/share-core.mjs
+test/share-sync.mjs
