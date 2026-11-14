@@ -7,8 +7,10 @@ compatibility_date = "2026-11-01"
 [vars]
 REPO = "rbandi31415-beep/dermaglow-tasks"
 BRANCH = "main"
-# Set these in the Cloudflare dashboard (Settings → Variables and secrets), not here:
-#   GITHUB_TOKEN        secret: fine-grained token, Contents read/write on dermaglow-tasks only
-#   ALLOWED_EMAILS      secret: comma-separated, e.g. you@example.com,david@example.com
-#   ACCESS_TEAM_DOMAIN  e.g. yourteam.cloudflareaccess.com
-#   ACCESS_AUD          the Access application's "Application Audience (AUD) Tag"
+# Cloudflare Access application "tasks" (tasks.dermaglow.tech). Not secrets: they only say which
+# signed login tokens to accept.
+ACCESS_TEAM_DOMAIN = "withered-boat-1814.cloudflareaccess.com"
+ACCESS_AUD = "efa36cd5fef0868299471f5ea65d17969db1c67b7629c8e69c80ca1400c42515"
+# Set as encrypted secrets in the dashboard (Settings → Variables and secrets), never here:
+#   GITHUB_TOKEN    fine-grained token, Contents read/write on dermaglow-tasks only
+#   ALLOWED_EMAILS  comma-separated emails allowed to use the API
