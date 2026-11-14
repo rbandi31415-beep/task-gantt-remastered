@@ -372,8 +372,53 @@ function spanOf(tasks: Task[]): { start: string; end: string } | undefined {
 // フォルダ階層を入れ子の表示行へ展開（collapsed のフォルダは子を省く）
 // flatten the folder tree into nested rows (collapsed folders hide their children)
 // 既定のタスク比較＝開始日昇順（呼び出し側が指定しなければこれ）/ default task order = start ascending
-const defaultTaskCompare = (a: Task, b: Task): number =>
-  (anchorStart(a) ?? "9999").localeCompare(anchorStart(b) ?? "9999");
+// ── 並び順（Obsidian と Web で共通）/ sort order shared by Obsidian and the web app ──
+export type SortBy = "name" | "start" | "end" | "progress" | "assignee" | "status" | "tags";
+export interface Sortable {
+  name: string;
+  path?: string;
+  rel?: string;
+  start?: string;
+  end?: string;
+  milestone: boolean;
+  status?: string;
+  progress?: number;
+  assignee?: string;
+  tags?: string[];
+}
+const NO_DATE = "9999-99-99"; // 日付なしは昇順で末尾 / undated sorts last ascending
+const startOf = (t: Sortable) => (t.milestone ? t.end ?? t.start : t.start);
+const endOf = (t: Sortable) => (t.milestone ? t.end ?? t.start : t.end ?? t.start);
+// 選んだ列で比較し、同値は名前→パスで必ず決着させる（ファイル列挙順に依存しない）
+// compare by the chosen column; ties always fall back to name then path, never to file listing order
+export function makeTaskCompare(
+  by: string,
+  dir: "asc" | "desc",
+  statuses: { id: string }[] = []
+): (a: Sortable, b: Sortable) => number {
+  const sign = dir === "desc" ? -1 : 1;
+  const statusOrder = new Map(statuses.map((s, i) => [s.id, i]));
+  const key = (t: Sortable): string | number => {
+    switch (by as SortBy) {
+      case "name": return t.name.toLowerCase();
+      case "end": return endOf(t) ?? NO_DATE;
+      case "progress": return t.progress ?? -1;
+      case "assignee": return (t.assignee ?? "").toLowerCase();
+      case "status": return t.status != null ? statusOrder.get(t.status) ?? 999 : 999;
+      case "tags": return (t.tags ?? []).join(",").toLowerCase();
+      default: return startOf(t) ?? NO_DATE;
+    }
+  };
+  return (a, b) => {
+    const ka = key(a);
+    const kb = key(b);
+    const c = typeof ka === "number" && typeof kb === "number" ? ka - kb : String(ka).localeCompare(String(kb));
+    if (c) return c * sign;
+    return a.name.toLowerCase().localeCompare(b.name.toLowerCase()) || (a.path ?? a.rel ?? "").localeCompare(b.path ?? b.rel ?? "");
+  };
+}
+
+const defaultTaskCompare = makeTaskCompare("start", "asc");
 
 export function buildRows(
   tasks: Task[],

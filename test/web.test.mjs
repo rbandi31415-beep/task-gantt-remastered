@@ -56,6 +56,11 @@ check("rows: parent first, children indented", rows[0].task.name === "Demo" || r
 const sprintRow = rows.find((r) => r.task.name === "Sprint 1 TWL sensor");
 check("rows: parent rollup spans children", same(sprintRow.span, { start: "2026-11-11", end: "2026-11-20" }));
 check("rows: collapse hides children", buildWebRows(tasks, new Set(["Sprint 1 TWL sensor.md"]), false).every((r) => r.task.parent !== "Sprint 1 TWL sensor.md"));
+// same order as the plugin: start date, ties by name, undated last; desc flips
+const order = buildWebRows(tasks, new Set(), false, { by: "start", dir: "asc" }).filter((r) => r.depth === 1).map((r) => r.task.name);
+check("rows: children sorted by start then name", JSON.stringify(order) === JSON.stringify(["Search for sensors", "Preliminary BOM", "CAD v1"]));
+const byName = buildWebRows(tasks, new Set(), false, { by: "name", dir: "desc" }).filter((r) => r.depth === 0).map((r) => r.task.name);
+check("rows: name descending", JSON.stringify(byName) === JSON.stringify(["Sprint 1 TWL sensor", "Demo"]));
 check("rows: hide done drops done tasks", !buildWebRows(tasks, new Set(), true).some((r) => r.task.name === "Demo"));
 
 // editing keeps everything else byte-for-byte where possible

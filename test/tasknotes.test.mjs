@@ -3,7 +3,7 @@
 import { TFile, TFolder } from "./obsidian-stub.mjs";
 import {
   configureCompat, parseDepEntry, makeDepEntry, combineDateTime, writeTz, applyTaskNotesTouch,
-  collectTasks, addDependency, removeDependency, reparentTask, writeField, writeDates, inScope,
+  collectTasks, addDependency, removeDependency, reparentTask, writeField, writeDates, inScope, makeTaskCompare,
 } from "./model.mjs";
 
 let pass = 0;
@@ -143,6 +143,25 @@ tasks = collectTasks(v.app, settings, "Tasks");
 check("collect (compat off): due-only is a milestone (legacy)", T("CAD v1").milestone === true);
 check("collect (compat off): object deps still read", T("Prelim BOM").deps.length === 1);
 configureCompat(true, statuses);
+
+// ── 並び順（Web と共通）/ shared sort order ──
+const cmpStart = makeTaskCompare("start", "asc");
+const sorted = [
+  { name: "b", path: "b", start: "2026-11-10", milestone: false },
+  { name: "a", path: "a", start: "2026-11-10", milestone: false },
+  { name: "c", path: "c", milestone: false },
+  { name: "d", path: "d", end: "2026-11-01", milestone: true },
+].sort(cmpStart).map((t) => t.name).join("");
+check("sort: start asc, ties by name, undated last, milestone by due", sorted === "dabc");
+check("sort: desc reverses the key but keeps name tie-break", [
+  { name: "b", start: "2026-11-10", milestone: false },
+  { name: "a", start: "2026-11-10", milestone: false },
+  { name: "z", start: "2026-12-01", milestone: false },
+].sort(makeTaskCompare("start", "desc")).map((t) => t.name).join("") === "zab");
+check("sort: status uses configured order", [
+  { name: "x", status: "done", milestone: false },
+  { name: "y", status: "open", milestone: false },
+].sort(makeTaskCompare("status", "asc", statuses)).map((t) => t.name).join("") === "yx");
 
 // ── 依存の追加・削除 / adding and removing dependencies ──
 v = makeApp(vaultFiles);

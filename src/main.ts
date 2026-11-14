@@ -215,6 +215,11 @@ export default class GanttPlugin extends Plugin {
       }
       s.openDefaultFolder = s.openDefaultFolder ?? true;
     }
+    if (from < 4) {
+      // Web アプリと同じ既定の並び（開始日の早い順）に揃える / match the web app's default order (earliest start first)
+      s.sortBy = "start";
+      s.sortDir = "asc";
+    }
     s.settingsVersion = SETTINGS_VERSION;
     if (from < SETTINGS_VERSION) void this.saveData(s);
   }

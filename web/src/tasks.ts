@@ -1,7 +1,7 @@
 // Task notes ⇄ Gantt rows, without a DOM. Edits keep every untouched frontmatter key, its order
 // and formatting, and follow the same TaskNotes rules as the Obsidian plugin (shared code).
 import { parseDocument, Document } from "yaml";
-import { parseDepEntry, makeDepEntry, applyTaskNotesTouch, parseStored, configureCompat } from "../../src/model";
+import { parseDepEntry, makeDepEntry, applyTaskNotesTouch, parseStored, configureCompat, makeTaskCompare } from "../../src/model";
 import type { DepType, StatusDef } from "../../src/types";
 
 export const STATUSES: StatusDef[] = [
@@ -127,11 +127,15 @@ export interface WebRow {
   span?: { start: string; end: string };
 }
 
-export function buildWebRows(tasks: WebTask[], collapsed: Set<string>, hideDone: boolean): WebRow[] {
+export type SortState = { by: string; dir: "asc" | "desc" };
+export const DEFAULT_SORT: SortState = { by: "start", dir: "asc" };
+
+export function buildWebRows(tasks: WebTask[], collapsed: Set<string>, hideDone: boolean, sort: SortState = DEFAULT_SORT): WebRow[] {
   const byRel = new Map(tasks.map((t) => [t.rel, t]));
   const kids = new Map<string, WebTask[]>();
   for (const t of tasks) if (t.parent && byRel.has(t.parent)) (kids.get(t.parent) ?? kids.set(t.parent, []).get(t.parent)!).push(t);
-  const cmp = (a: WebTask, b: WebTask) => (a.start ?? "9999").localeCompare(b.start ?? "9999") || a.name.localeCompare(b.name);
+  // same comparator as the Obsidian plugin, so both list tasks in the same order
+  const cmp = makeTaskCompare(sort.by, sort.dir, STATUSES) as (a: WebTask, b: WebTask) => number;
   const isDone = (t: WebTask) => STATUSES.find((s) => s.id === t.status)?.group === "completed";
   const subtree = (t: WebTask, seen = new Set<string>()): WebTask[] => {
     if (seen.has(t.rel)) return [];

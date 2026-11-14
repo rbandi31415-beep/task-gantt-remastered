@@ -1,7 +1,7 @@
 // Web Gantt for the shared task folder. Talks only to /api (the Pages Function).
 import {
   STATUSES, KEYS, RemoteFile, WebTask, WebRow, parseTasks, buildWebRows, editNote, setDates, setParent, setDeps,
-  makeResolver, newNote, safeName, today,
+  makeResolver, newNote, safeName, today, SortState, DEFAULT_SORT,
 } from "./tasks";
 import type { DepType } from "../../src/types";
 
@@ -18,6 +18,7 @@ const state = {
   zoom: (localStorage.getItem("zoom") as Zoom) || "day",
   hideDone: localStorage.getItem("hideDone") === "1",
   collapsed: new Set<string>(JSON.parse(localStorage.getItem("collapsed") || "[]") as string[]),
+  sort: (JSON.parse(localStorage.getItem("sort") || "null") as SortState | null) ?? DEFAULT_SORT,
   selected: null as string | null,
   email: "",
   busy: false,
@@ -102,7 +103,7 @@ function range(rows: WebRow[]): { from: number; to: number } {
 }
 
 function render() {
-  state.rows = buildWebRows(state.tasks, state.collapsed, state.hideDone);
+  state.rows = buildWebRows(state.tasks, state.collapsed, state.hideDone, state.sort);
   const { from, to } = range(state.rows);
   const px = PX[state.zoom];
   const width = (to - from + 1) * px;
@@ -113,7 +114,17 @@ function render() {
   const table = $("#table");
   table.replaceChildren();
   const head = el("div", { class: "row head" });
-  head.append(el("span", { class: "c-name" }, "Task"), el("span", { class: "c-status" }, "Status"), el("span", { class: "c-date" }, "Start"), el("span", { class: "c-date" }, "Due"));
+  // click a header to sort by it; click again to flip the direction (same as the Obsidian plugin)
+  for (const [cls, label, by] of [["c-name", "Task", "name"], ["c-status", "Status", "status"], ["c-date", "Start", "start"], ["c-date", "Due", "end"]]) {
+    const on = state.sort.by === by;
+    const h = el("button", { class: `${cls} sorth${on ? " on" : ""}`, type: "button", title: `Sort by ${label.toLowerCase()}` }, `${label}${on ? (state.sort.dir === "asc" ? " ↑" : " ↓") : ""}`);
+    h.onclick = () => {
+      state.sort = on ? { by, dir: state.sort.dir === "asc" ? "desc" : "asc" } : { by, dir: "asc" };
+      localStorage.setItem("sort", JSON.stringify(state.sort));
+      render();
+    };
+    head.append(h);
+  }
   table.append(head);
   for (const r of state.rows) {
     const t = r.task;

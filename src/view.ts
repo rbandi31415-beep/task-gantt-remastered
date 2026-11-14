@@ -12,6 +12,7 @@ import {
   combineDateTime,
   writeTz,
   inScope,
+  makeTaskCompare,
   writeField,
   writeBody,
   renameTask,
@@ -431,28 +432,9 @@ export class GanttView extends ItemView {
   }
   // 現在のソート設定からタスク比較関数を作る / build a task comparator from the current sort settings
   private taskComparator(): (a: Task, b: Task) => number {
-    const by = this.plugin.settings.sortBy as ColumnId;
-    const dir = this.plugin.settings.sortDir === "desc" ? -1 : 1;
-    // ステータスは設定の定義順（アルファベット順ではない）/ status sorts by the configured order, not alphabetically
-    const statusOrder = new Map(this.plugin.settings.statuses.map((s, i) => [s.id, i]));
-    const key = (t: Task): string | number => {
-      switch (by) {
-        case "name": return t.name.toLowerCase();
-        case "start": return anchorStart(t) ?? "9999-99-99";
-        case "end": return anchorEnd(t) ?? "9999-99-99";
-        case "progress": return t.progress ?? -1; // 未設定は 0% より前 / unset sorts ahead of 0%
-        case "assignee": return (t.assignee ?? "").toLowerCase();
-        case "status": return t.status != null ? statusOrder.get(t.status) ?? 999 : 999;
-        case "tags": return t.tags.join(",").toLowerCase();
-        default: return anchorStart(t) ?? "9999-99-99";
-      }
-    };
-    return (a, b) => {
-      const ka = key(a);
-      const kb = key(b);
-      const c = typeof ka === "number" && typeof kb === "number" ? ka - kb : String(ka).localeCompare(String(kb));
-      return c * dir;
-    };
+    const st = this.plugin.settings;
+    // Web アプリと同じ比較関数（同値は名前→パスで決着）/ same comparator as the web app (ties: name, then path)
+    return makeTaskCompare(st.sortBy, st.sortDir === "desc" ? "desc" : "asc", st.statuses);
   }
 
   // 列ヘッダクリックでソート列/方向を切替えて永続化 / clicking a header toggles sort column/direction (persisted)

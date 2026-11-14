@@ -153,7 +153,7 @@ export interface GcalSyncState {
   link?: string; // イベントの htmlLink / the event's htmlLink
 }
 
-export const SETTINGS_VERSION = 3;
+export const SETTINGS_VERSION = 4;
 
 export const DEFAULT_SETTINGS: GanttSettings = {
   rootFolder: "",
