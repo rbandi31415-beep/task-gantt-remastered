@@ -10,6 +10,7 @@ import {
   subtreePaths,
   writeDates,
   combineDateTime,
+  writeTz,
   writeField,
   writeBody,
   renameTask,
@@ -2506,7 +2507,7 @@ export class GanttView extends ItemView {
       }
       repaint(); // 補正を即時反映 / reflect any clamping right away
       await this.pushUndo(tr().undoReschedule(t.name)); // Ctrl+Z で取り消し可 / undoable
-      const tz = this.plugin.settings.tz;
+      const tz = writeTz(this.plugin.settings.tz);
       await writeField(this.app, this.selectedPath, k.start, combineDateTime(state.start || undefined, times.start, tz));
       await writeField(this.app, this.selectedPath, k.end, combineDateTime(state.end || undefined, times.end, tz));
       await this.refresh();
@@ -2951,7 +2952,7 @@ export class GanttView extends ItemView {
       let te = t.endTime;
       if (state.start && state.start === state.end && ts && te && te < ts) te = ts;
       await this.pushUndo(tr().undoReschedule(t.name)); // Ctrl+Z で取り消し可 / undoable
-      const tz = this.plugin.settings.tz;
+      const tz = writeTz(this.plugin.settings.tz);
       await writeField(this.app, t.path, k.start, combineDateTime(state.start || undefined, ts, tz));
       await writeField(this.app, t.path, k.end, combineDateTime(state.end || undefined, te, tz));
       await this.refresh();

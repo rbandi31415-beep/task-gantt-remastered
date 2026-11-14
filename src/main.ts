@@ -3,7 +3,7 @@ import { GanttSettings, DEFAULT_SETTINGS, GanttSettingTab } from "./settings";
 import { GanttView } from "./view";
 import { VIEW_TYPE_GANTT, GanttViewState } from "./types";
 import { t } from "./i18n";
-import { inferStatusGroup } from "./model";
+import { inferStatusGroup, configureCompat } from "./model";
 import { checkNotifications } from "./notify";
 import { migrateRenamedPath, schedulePush, syncGcal } from "./gcal/sync";
 
@@ -153,9 +153,20 @@ export default class GanttPlugin extends Plugin {
     const st: typeof this.settings.gcal.state = {};
     for (const [p, v] of Object.entries(this.settings.gcal.state ?? {})) st[p] = { ...v };
     this.settings.gcal.state = st;
+    this.applyCompat();
+  }
+
+  // TaskNotes 互換を model へ反映。enabledPlugins はコミュニティプラグイン設定由来なので読込順に依らない
+  // push TaskNotes compat into the model; enabledPlugins comes from the community-plugins config, so load order doesn't matter
+  applyCompat(): void {
+    const mode = this.settings.taskNotesCompat ?? "auto";
+    const plugins = (this.app as unknown as { plugins?: { enabledPlugins?: Set<string> } }).plugins;
+    const on = mode === "on" || (mode === "auto" && !!plugins?.enabledPlugins?.has("tasknotes"));
+    configureCompat(on, this.settings.statuses, this.settings.keys.status);
   }
 
   async saveSettings(): Promise<void> {
+    this.applyCompat();
     await this.saveData(this.settings);
     this.app.workspace.getLeavesOfType(VIEW_TYPE_GANTT).forEach((leaf: WorkspaceLeaf) => {
       const v = leaf.view;

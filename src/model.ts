@@ -31,16 +31,98 @@ export function statusGroupOf(statuses: StatusDef[], status?: string): StatusGro
   return statuses.find((s) => s.id === status)?.group;
 }
 
-// after の生エントリから型と リンクを分離 / split a raw `after` entry into type + link
-function parseDepRaw(raw: string): { type: DepType; link: string } {
-  const m = raw.match(/^\s*(FS|SS|FF)\s*:\s*(.*)$/i);
-  if (m) return { type: m[1].toUpperCase() as DepType, link: m[2].trim() };
-  return { type: "FS", link: raw.trim() };
+// ── TaskNotes 互換 / TaskNotes compatibility ──
+// TaskNotes は依存を {uid, reltype, gap?} オブジェクトで、時刻をオフセット無しで保存し、
+// 書き込みごとに dateModified・完了時に completedDate を更新する。互換モードではそれに合わせる
+// TaskNotes stores dependencies as {uid, reltype, gap?} objects, times without an offset, and
+// bumps dateModified on every write (completedDate on completion). Compat mode follows suit.
+let compat = false;
+let compatStatuses: StatusDef[] = [];
+let compatStatusKey = "status";
+export function configureCompat(on: boolean, statuses: StatusDef[], statusKey = "status"): void {
+  compat = on;
+  compatStatuses = statuses;
+  compatStatusKey = statusKey;
+}
+export function isCompat(): boolean {
+  return compat;
+}
+// 書き込み用タイムゾーン。互換モードは "floating"＝オフセット無し / tz used when writing; compat = floating (no offset)
+export function writeTz(tz: string): string {
+  return compat ? "floating" : tz;
 }
 
-// after エントリから型プレフィックス(FS:/SS:/FF:)を除いてリンク部だけ取り出す / strip the type prefix, keep the link
-function stripDepType(raw: unknown): string {
-  return String(raw).replace(/^\s*(FS|SS|FF)\s*:\s*/i, "");
+const RELTYPE_TO_DEP: Record<string, DepType> = { FINISHTOSTART: "FS", STARTTOSTART: "SS", FINISHTOFINISH: "FF" };
+const DEP_TO_RELTYPE: Record<DepType, string> = { FS: "FINISHTOSTART", SS: "STARTTOSTART", FF: "FINISHTOFINISH" };
+
+// 依存エントリ（"FS:[[x]]" 文字列 or TaskNotes オブジェクト）を型＋リンクへ / parse a dependency entry
+// (a "FS:[[x]]" string or a TaskNotes object) into type + link; unparseable → null
+export function parseDepEntry(raw: unknown): { type: DepType; link: string } | null {
+  if (raw == null) return null;
+  if (typeof raw === "object") {
+    const o = raw as { uid?: unknown; reltype?: unknown };
+    const uid = typeof o.uid === "string" ? o.uid.trim() : "";
+    if (!uid) return null;
+    const rt = typeof o.reltype === "string" ? o.reltype.trim().toUpperCase() : "";
+    // STARTTOFINISH は未対応 → FS として描く（元の値は書き換えない）/ SF unsupported: drawn as FS, stored value untouched
+    return { type: RELTYPE_TO_DEP[rt] ?? "FS", link: uid };
+  }
+  const str = String(raw).trim();
+  if (!str) return null;
+  const m = str.match(/^(FS|SS|FF)\s*:\s*(.*)$/i);
+  if (m) return { type: m[1].toUpperCase() as DepType, link: m[2].trim() };
+  return { type: "FS", link: str };
+}
+
+// 依存エントリを保存形へ / build a stored dependency entry
+export function makeDepEntry(link: string, type: DepType, asObject: boolean, gap?: string): unknown {
+  if (asObject) return gap ? { uid: link, reltype: DEP_TO_RELTYPE[type], gap } : { uid: link, reltype: DEP_TO_RELTYPE[type] };
+  return type === "FS" ? link : `${type}:${link}`; // FS はプレフィックス無しで後方互換 / FS unprefixed for back-compat
+}
+
+// ローカル日付 YYYY-MM-DD / local calendar date
+function localDate(d: Date): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+// TaskNotes と同じ形式のローカル ISO（ミリ秒＋オフセット）/ local ISO with ms + offset, as TaskNotes writes it
+function localIsoWithOffset(d: Date): string {
+  const off = -d.getTimezoneOffset();
+  const ms = String(d.getMilliseconds()).padStart(3, "0");
+  return `${localDate(d)}T${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}.${ms}${offsetSuffix(off)}`;
+}
+
+// 互換モードの書き込み後処理：完了日と更新日時 / compat post-write: completedDate + dateModified
+export function applyTaskNotesTouch(
+  fm: Record<string, unknown>,
+  statusKey: string,
+  before: unknown,
+  statuses: StatusDef[] = compatStatuses,
+  now: Date = new Date()
+): void {
+  const after = fm[statusKey];
+  // 繰り返しタスクは TaskNotes が complete_instances で管理するので触らない / recurring tasks are TaskNotes' business
+  if (after !== before && fm.recurrence == null) {
+    const gAfter = statusGroupOf(statuses, after == null ? undefined : String(after));
+    const gBefore = statusGroupOf(statuses, before == null ? undefined : String(before));
+    if (gAfter === "completed") {
+      if (!fm.completedDate) fm.completedDate = localDate(now);
+    } else if (gBefore === "completed") delete fm.completedDate;
+  }
+  fm.dateModified = localIsoWithOffset(now);
+}
+
+// すべてのフロントマター書き込みの入口 / single entry point for frontmatter writes
+async function editFm(
+  app: App,
+  file: TFile,
+  statusKey: string,
+  fn: (fm: Record<string, unknown>) => void
+): Promise<void> {
+  await app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
+    const before = fm[statusKey];
+    fn(fm);
+    if (compat) applyTaskNotesTouch(fm, statusKey, before);
+  });
 }
 
 const pad2 = (n: number): string => String(n).padStart(2, "0");
@@ -100,6 +182,7 @@ export function toInstant(date: string, time: string, tz: string): number {
 export function combineDateTime(date: string | undefined, time: string | undefined, tz: string): string | undefined {
   if (!date) return undefined;
   if (!time) return date;
+  if (tz === "floating") return `${date}T${time}`; // TaskNotes 形式（オフセット無し）/ TaskNotes style, no offset
   // "system" はその日時のローカルオフセット（DST考慮）/ "system" = device offset at that wall time (DST-aware)
   const m = tz.match(/^([+-])(\d{2}):(\d{2})$/);
   const min = m ? (m[1] === "-" ? -1 : 1) * (+m[2] * 60 + +m[3]) : -new Date(`${date}T${time}`).getTimezoneOffset();
@@ -107,10 +190,10 @@ export function combineDateTime(date: string | undefined, time: string | undefin
 }
 
 // after を文字列配列へ正規化 / normalize `after` into a string array
-function toArray(v: unknown): string[] {
+function toArray(v: unknown): unknown[] {
   if (v == null || v === "") return [];
-  if (Array.isArray(v)) return v.map((x) => String(x));
-  return [String(v)];
+  if (Array.isArray(v)) return v as unknown[];
+  return [v];
 }
 
 // フロントマターの tags 値を文字列配列へ正規化（配列/カンマ/空白区切り・# 抜き）
@@ -149,8 +232,8 @@ export function collectTasks(app: App, settings: GanttSettings, folderPath: stri
   walk(root);
 
   const k = settings.keys;
-  const rawAfter = new Map<string, string[]>(); // path -> 生の after / raw after entries
-  const rawParent = new Map<string, string>(); // path -> 生の parent リンク / raw parent link
+  const rawAfter = new Map<string, unknown[]>(); // path -> 生の after / raw after entries
+  const rawParent = new Map<string, string[]>(); // path -> 親候補リンク / candidate parent links
   const tasks: Task[] = files.map((file) => {
     const cache = app.metadataCache.getFileCache(file);
     const fm = cache?.frontmatter ?? {};
@@ -163,10 +246,17 @@ export function collectTasks(app: App, settings: GanttSettings, folderPath: stri
 
     const ps = parseStored(fm[k.start], settings.tz);
     const pe = parseStored(fm[k.end], settings.tz);
-    const start = ps?.date;
+    let start = ps?.date;
+    let startTime = ps?.time;
     let end = pe?.date;
-    // マイルストーン＝期限(end)のみ入力、または明示フラグ / milestone = only the due date, or explicit flag
-    const milestone = fm[k.milestone] === true || (!!end && !start);
+    // マイルストーン＝期限(end)のみ入力、または明示フラグ。TaskNotes では期限のみは普通のタスクなので明示フラグのみ
+    // milestone = only the due date, or explicit flag. In TaskNotes a due-only task is ordinary: flag only
+    const milestone = fm[k.milestone] === true || (!compat && !!end && !start);
+    // 互換モードの期限のみタスクは期限日に置く / compat: a due-only task sits on its due date
+    if (compat && end && !start && !milestone) {
+      start = end;
+      startTime = pe?.time;
+    }
     // 「開始のみ・終了なし」は無効ルール → 終了=開始（1日タスク扱い）/ "start only" isn't valid: mirror end = start
     if (start && !end) end = start;
 
@@ -174,8 +264,10 @@ export function collectTasks(app: App, settings: GanttSettings, folderPath: stri
     // parent は any を直接受けず unknown 経由で安全に文字列化 / coerce parent via unknown (avoid unsafe any)
     const pv: unknown = fm[k.parent];
     if (pv != null && pv !== "") {
-      const link = Array.isArray(pv) ? (pv as unknown[])[0] : pv;
-      rawParent.set(file.path, String(link));
+      // TaskNotes の projects は複数可：スコープ内で解決できる最初のタスクを親とする
+      // TaskNotes' projects is a list: the first entry resolving to an in-scope task is the parent
+      const list = Array.isArray(pv) ? (pv as unknown[]) : [pv];
+      rawParent.set(file.path, compat ? list.map((x) => String(x)) : [String(list[0])]);
     }
     return {
       path: file.path,
@@ -183,7 +275,7 @@ export function collectTasks(app: App, settings: GanttSettings, folderPath: stri
       groups,
       start,
       end,
-      startTime: ps?.time,
+      startTime,
       endTime: pe?.time,
       // 0 以下や数値でない見積りは「未設定」として既定長へ倒す / non-numeric or non-positive estimates fall back to the default length
       estimateMin: Number.isFinite(Number(fm[k.estimate])) && Number(fm[k.estimate]) > 0 ? Number(fm[k.estimate]) : undefined,
@@ -201,15 +293,19 @@ export function collectTasks(app: App, settings: GanttSettings, folderPath: stri
   const byPath = new Map(tasks.map((t) => [t.path, t]));
   for (const t of tasks) {
     for (const raw of rawAfter.get(t.path) ?? []) {
-      const { type, link } = parseDepRaw(raw);
-      const dest = resolveLink(app, link, t.path);
-      if (dest && byPath.has(dest.path)) t.deps.push({ path: dest.path, type });
+      const dep = parseDepEntry(raw);
+      if (!dep) continue;
+      const dest = resolveLink(app, dep.link, t.path);
+      if (dest && dest.path !== t.path && byPath.has(dest.path) && !t.deps.some((d) => d.path === dest.path))
+        t.deps.push({ path: dest.path, type: dep.type });
     }
     // 親リンクを解決（解決できない＝宙ぶらりんはトップレベル扱い）/ resolve parent (unresolved = treated as top-level)
-    const rp = rawParent.get(t.path);
-    if (rp) {
+    for (const rp of rawParent.get(t.path) ?? []) {
       const dest = resolveLink(app, rp, t.path);
-      if (dest && dest.path !== t.path && byPath.has(dest.path)) t.parent = dest.path;
+      if (dest && dest.path !== t.path && byPath.has(dest.path)) {
+        t.parent = dest.path;
+        break;
+      }
     }
   }
   return tasks;
@@ -376,18 +472,19 @@ export async function writeDates(
   const file = app.vault.getAbstractFileByPath(path);
   if (!(file instanceof TFile)) return;
   const k = settings.keys;
-  await app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
+  const wtz = writeTz(settings.tz);
+  await editFm(app, file, k.status, (fm: Record<string, unknown>) => {
     // 既存値に時刻が付いていたら表示時刻を新しい日付へ引き継ぐ（オフセットは設定タイムゾーンへ正規化）
     // carry the displayed time-of-day over to the new date (re-normalizing the offset to the configured tz)
     const ts = times ? times.start : parseStored(fm[k.start], settings.tz)?.time;
     const te = times ? times.end : parseStored(fm[k.end], settings.tz)?.time;
     if (milestone) {
       // マイルストーンは期限(end)のみ / milestone keeps only the due date
-      fm[k.end] = combineDateTime(end, te, settings.tz);
+      fm[k.end] = combineDateTime(end, te, wtz);
       delete fm[k.start];
     } else {
-      fm[k.start] = combineDateTime(start, ts, settings.tz);
-      if (!opts?.keepEnd) fm[k.end] = combineDateTime(end, te, settings.tz);
+      fm[k.start] = combineDateTime(start, ts, wtz);
+      if (!opts?.keepEnd) fm[k.end] = combineDateTime(end, te, wtz);
     }
   });
 }
@@ -397,11 +494,12 @@ export async function writeField(
   app: App,
   path: string,
   key: string,
-  value: unknown
+  value: unknown,
+  statusKey = compatStatusKey
 ): Promise<void> {
   const file = app.vault.getAbstractFileByPath(path);
   if (!(file instanceof TFile)) return;
-  await app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
+  await editFm(app, file, statusKey, (fm: Record<string, unknown>) => {
     if (value == null || value === "") delete fm[key];
     else fm[key] = value;
   });
@@ -487,7 +585,7 @@ export async function addTag(app: App, path: string, tag: string): Promise<boole
   const clean = tag.replace(/^#/, "").trim();
   if (!clean) return false;
   let changed = false;
-  await app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
+  await editFm(app, file, compatStatusKey, (fm: Record<string, unknown>) => {
     const cur = normalizeTags(fm.tags);
     if (!cur.includes(clean)) {
       cur.push(clean);
@@ -503,7 +601,7 @@ export async function removeTag(app: App, path: string, tag: string): Promise<vo
   const file = app.vault.getAbstractFileByPath(path);
   if (!(file instanceof TFile)) return;
   const clean = tag.replace(/^#/, "").trim();
-  await app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
+  await editFm(app, file, compatStatusKey, (fm: Record<string, unknown>) => {
     const cur = normalizeTags(fm.tags).filter((x) => x !== clean);
     if (cur.length) fm.tags = cur;
     else delete fm.tags;
@@ -540,10 +638,28 @@ export async function reparentTask(
   const k = settings.keys;
   const oldContent = await app.vault.read(src); // 変更前スナップショット / pre-op snapshot
   // 親リンクを設定（または解除）/ set (or clear) the parent link
-  await app.fileManager.processFrontMatter(src, (fm: Record<string, unknown>) => {
-    if (parentFile) fm[k.parent] = app.fileManager.generateMarkdownLink(parentFile, srcPath);
+  const oldParent = tasks.find((t) => t.path === srcPath)?.parent;
+  await editFm(app, src, k.status, (fm: Record<string, unknown>) => {
+    const link = parentFile ? app.fileManager.generateMarkdownLink(parentFile, srcPath) : undefined;
+    if (!compat) {
+      if (link) fm[k.parent] = link;
+      else delete fm[k.parent];
+      return;
+    }
+    // 互換モード：projects リストの他の項目は残し、旧親だけ差し替える
+    // compat: keep every other projects entry, swap out only the old parent
+    const cur = fm[k.parent];
+    const list: unknown[] = cur == null || cur === "" ? [] : Array.isArray(cur) ? [...(cur as unknown[])] : [cur];
+    const kept = list.filter((raw) => {
+      const p = resolveLink(app, String(raw), srcPath)?.path;
+      return p !== oldParent && (!parentFile || p !== parentFile.path);
+    });
+    if (link) kept.unshift(link);
+    if (kept.length) fm[k.parent] = kept;
     else delete fm[k.parent];
   });
+  // TaskNotes はタスクを 1 フォルダで管理するのでファイルは動かさない / TaskNotes keeps tasks in one folder: don't move files
+  if (compat) return { moves: [], oldContent };
   // サブツリー（自分＋子孫）は同一フォルダに同居しているので、全部 destFolder へ移す
   // the subtree co-locates in one folder, so move all of it into destFolder
   const dir = normalizePath(destFolder || "/");
@@ -577,15 +693,22 @@ export async function addDependency(
   const pred = app.vault.getAbstractFileByPath(predPath);
   if (!(succ instanceof TFile) || !(pred instanceof TFile)) return false;
   const k = settings.keys;
-  await app.fileManager.processFrontMatter(succ, (fm: Record<string, unknown>) => {
+  await editFm(app, succ, k.status, (fm: Record<string, unknown>) => {
     const existing = fm[k.after];
     const arr: unknown[] = existing == null ? [] : Array.isArray(existing) ? existing : [existing];
+    const pointsAtPred = (raw: unknown): boolean => {
+      const dep = parseDepEntry(raw);
+      return !!dep && resolveLink(app, dep.link, successorPath)?.path === predPath;
+    };
+    // 置き換え時は TaskNotes の gap を引き継ぐ / keep a TaskNotes gap when replacing
+    const prev = arr.find(pointsAtPred) as { gap?: unknown } | undefined;
+    const gap = prev && typeof prev === "object" && typeof prev.gap === "string" ? prev.gap : undefined;
     // 既存の同 pred を除去 / drop any existing entry to the same predecessor
-    const kept = arr.filter(
-      (raw) => resolveLink(app, stripDepType(raw), successorPath)?.path !== predPath
-    );
+    const kept = arr.filter((raw) => !pointsAtPred(raw));
     const link = app.fileManager.generateMarkdownLink(pred, successorPath);
-    kept.push(type === "FS" ? link : `${type}:${link}`); // FS はプレフィックス無しで後方互換
+    // 既存エントリがオブジェクト形式なら互換モード外でもそれに合わせる / match existing object entries even outside compat
+    const asObject = compat || arr.some((x) => x != null && typeof x === "object");
+    kept.push(makeDepEntry(link, type, asObject, gap));
     fm[k.after] = kept;
   });
   return true;
@@ -601,13 +724,14 @@ export async function removeDependency(
   const succ = app.vault.getAbstractFileByPath(successorPath);
   if (!(succ instanceof TFile)) return;
   const k = settings.keys;
-  await app.fileManager.processFrontMatter(succ, (fm: Record<string, unknown>) => {
+  await editFm(app, succ, k.status, (fm: Record<string, unknown>) => {
     const existing = fm[k.after];
     if (existing == null) return;
     const list: unknown[] = Array.isArray(existing) ? existing : [existing];
-    const filtered = list.filter(
-      (raw) => resolveLink(app, stripDepType(raw), successorPath)?.path !== predPath
-    );
+    const filtered = list.filter((raw) => {
+      const dep = parseDepEntry(raw);
+      return !dep || resolveLink(app, dep.link, successorPath)?.path !== predPath;
+    });
     if (filtered.length) fm[k.after] = filtered;
     else delete fm[k.after];
   });

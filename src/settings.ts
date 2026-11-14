@@ -118,6 +118,8 @@ export interface GanttSettings {
   // a due date is a deadline rather than the work itself, so "estimate" draws it as a marker instead
   barSpan: "dates" | "estimate";
   defaultDurationMin: number; // 見積りが無いタスクのバー長（分）/ bar length for tasks with no estimate (minutes)
+  // TaskNotes 互換：auto=TaskNotes が有効なら ON / TaskNotes compatibility: auto = on when TaskNotes is enabled
+  taskNotesCompat: "auto" | "on" | "off";
   // フロントマターのキー名（プロジェクトに合わせて変更可）/ frontmatter key names
   keys: {
     start: string;
@@ -198,6 +200,7 @@ export const DEFAULT_SETTINGS: GanttSettings = {
   },
   barSpan: "dates",
   defaultDurationMin: 60,
+  taskNotesCompat: "auto",
   keys: {
     start: "start",
     end: "end",
@@ -275,6 +278,20 @@ export class GanttSettingTab extends PluginSettingTab {
   private ctlRecurse(setting: Setting): void {
     const s = this.plugin.settings;
     setting.addToggle((t) => t.setValue(s.recurse).onChange((v) => { s.recurse = v; this.save(); }));
+  }
+
+  // TaskNotes 互換モード / TaskNotes compatibility mode
+  private ctlCompat(setting: Setting): void {
+    const s = this.plugin.settings;
+    setting.addDropdown((d) =>
+      d
+        .addOptions({ auto: "Auto (on when TaskNotes is enabled)", on: "On", off: "Off" })
+        .setValue(s.taskNotesCompat)
+        .onChange((v) => {
+          s.taskNotesCompat = v as "auto" | "on" | "off";
+          this.save();
+        })
+    );
   }
 
   // バー長の決め方と、見積り未設定時の既定長 / how bar length is decided, plus the fallback length
@@ -681,6 +698,7 @@ export class GanttSettingTab extends PluginSettingTab {
         desc: "What a bar spans. 'Start + estimate' draws the work itself and shows the due date as a marker; the box sets the length used when a task has no estimate (minutes).",
         render: (x) => this.ctlBarSpan(x),
       },
+      { name: "TaskNotes compatibility", desc: "Read and write tasks the way the TaskNotes plugin does: blockedBy as dependency objects, projects as a list (re-parenting never moves files or drops other projects), due-only tasks as normal bars, times without an offset, and completedDate / dateModified kept up to date.", render: (x) => this.ctlCompat(x) },
       { name: tr().setDateFormatName, render: (x) => this.ctlDateFormat(x) },
       { name: tr().setTimezoneName, desc: tr().setTimezoneDesc, render: (x) => this.ctlTimezone(x) },
       {
@@ -882,6 +900,7 @@ export class GanttSettingTab extends PluginSettingTab {
           "What a bar spans. 'Start + estimate' draws the work itself and shows the due date as a marker; the box sets the length used when a task has no estimate (minutes)."
         )
     );
+    this.ctlCompat(new Setting(containerEl).setName("TaskNotes compatibility").setDesc("Read and write tasks the way the TaskNotes plugin does: blockedBy as dependency objects, projects as a list (re-parenting never moves files or drops other projects), due-only tasks as normal bars, times without an offset, and completedDate / dateModified kept up to date."));
     this.ctlDateFormat(new Setting(containerEl).setName(tr().setDateFormatName));
     this.ctlTimezone(new Setting(containerEl).setName(tr().setTimezoneName).setDesc(tr().setTimezoneDesc));
     this.ctlProgressLineColor(
