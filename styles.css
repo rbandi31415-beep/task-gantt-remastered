@@ -7,6 +7,12 @@
   position: relative;
   overflow: hidden;
 }
+/* overflow:hidden still lets the browser scroll the board in code (focus/scrollIntoView on the
+   off-screen detail panel), which slid the whole view sideways and added a second scrollbar.
+   clip forbids any scrolling of the board; only .ogantt-scroll scrolls. */
+.workspace-leaf-content .view-content.ogantt-board {
+  overflow: clip;
+}
 
 .ogantt-toolbar {
   display: flex;
@@ -1053,13 +1059,16 @@ input.ogantt-cell-input[type="number"] {
   border-left: 1px solid var(--background-modifier-border);
   box-shadow: -4px 0 16px rgba(0, 0, 0, 0.18);
   transform: translateX(100%);
-  transition: transform 0.18s ease;
+  visibility: hidden; /* closed: not focusable, never scrolled into view */
+  transition: transform 0.18s ease, visibility 0s linear 0.18s;
   overflow-y: auto;
   z-index: 5;
   padding: 12px 14px 12px 18px;
 }
 .ogantt-detail.is-open {
   transform: translateX(0);
+  visibility: visible;
+  transition: transform 0.18s ease, visibility 0s;
 }
 /* 左端の幅リサイズハンドル / left-edge resize handle */
 .ogantt-detail-resizer {

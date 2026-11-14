@@ -140,6 +140,8 @@ export class GanttView extends ItemView {
   async setState(state: GanttViewState, result: ViewStateResult): Promise<void> {
     if (state && typeof state.folder === "string") this.folder = state.folder;
     await super.setState(state, result);
+    // 見出しのタイトル（"Gantt: フォルダ名"）を更新 / refresh the header title for the new folder
+    (this.leaf as unknown as { updateHeader?: () => void }).updateHeader?.();
     if (this.gridHost) await this.refresh();
   }
 
@@ -2303,7 +2305,7 @@ export class GanttView extends ItemView {
       await this.refresh();
     })());
     // 新規作成直後は名前を選択状態にして即リネームできるように / select the name right after creation
-    if (focusTitle) window.setTimeout(() => { titleInput.focus(); titleInput.select(); }, 0);
+    if (focusTitle) window.setTimeout(() => { titleInput.focus({ preventScroll: true }); titleInput.select(); }, 0);
     const openBtn = header.createEl("button", { cls: "clickable-icon" });
     setIcon(openBtn, "external-link");
     openBtn.setAttr("aria-label", tr().openAsNote);
@@ -2470,7 +2472,7 @@ export class GanttView extends ItemView {
       bodyArea.value = bodyText;
       bodyWrap.addClass("is-editing");
       autosize();
-      bodyArea.focus();
+      bodyArea.focus({ preventScroll: true });
     });
     bodyArea.addEventListener("input", autosize);
     bodyArea.addEventListener("blur", () => void (async () => {
