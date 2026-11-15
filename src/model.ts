@@ -585,14 +585,87 @@ export async function writeBody(app: App, path: string, body: string): Promise<v
 
 // 新規タスク（空フロントマター .md）をフォルダ直下に作成。名前が衝突したら連番を付ける
 // create a new task (.md with empty frontmatter) in the folder; de-duplicate the name with a counter
-export async function createTask(app: App, folderPath: string, baseName: string): Promise<TFile | null> {
+// ── TaskNotes と同じ既定値で新規タスクを作る / new tasks get the same defaults TaskNotes would write ──
+export interface TaskNotesSettingsLike {
+  defaultTaskStatus?: string;
+  defaultTaskPriority?: string;
+  taskTag?: string;
+  taskIdentificationMethod?: string; // "tag" | "property"
+  taskPropertyName?: string;
+  taskPropertyValue?: string;
+  fieldMapping?: Record<string, string>;
+  taskCreationDefaults?: {
+    defaultContexts?: string;
+    defaultTags?: string;
+    defaultProjects?: string;
+    defaultTimeEstimate?: number;
+    defaultDueDate?: string; // none | today | tomorrow | next-week
+    defaultScheduledDate?: string;
+  };
+}
+const splitList = (v?: string): string[] => (v ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+function relativeDay(spec: string | undefined, now: Date): string | undefined {
+  const add = spec === "today" ? 0 : spec === "tomorrow" ? 1 : spec === "next-week" ? 7 : null;
+  if (add === null) return undefined;
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + add);
+  return localDate(d);
+}
+// TaskNotes の設定から新規タスクのフロントマター（順序付き）を作る / ordered frontmatter for a new task, from TaskNotes' settings
+export function taskNotesNewFrontmatter(tn: TaskNotesSettingsLike, now: Date = new Date()): [string, unknown][] {
+  const f = (k: string) => tn.fieldMapping?.[k] || k;
+  const d = tn.taskCreationDefaults ?? {};
+  const out: [string, unknown][] = [];
+  out.push([f("status"), tn.defaultTaskStatus || "open"]);
+  out.push([f("priority"), tn.defaultTaskPriority || "normal"]);
+  const due = relativeDay(d.defaultDueDate, now);
+  if (due) out.push([f("due"), due]);
+  const sched = relativeDay(d.defaultScheduledDate, now);
+  if (sched) out.push([f("scheduled"), sched]);
+  const tags = splitList(d.defaultTags).map((t) => t.replace(/^#/, ""));
+  if ((tn.taskIdentificationMethod ?? "tag") === "tag") tags.unshift(tn.taskTag || "task");
+  const uniqTags = [...new Set(tags)];
+  if (uniqTags.length) out.push(["tags", uniqTags]);
+  if (tn.taskIdentificationMethod === "property" && tn.taskPropertyName)
+    out.push([tn.taskPropertyName, tn.taskPropertyValue ?? true]);
+  const contexts = splitList(d.defaultContexts);
+  if (contexts.length) out.push([f("contexts"), contexts]);
+  const projects = splitList(d.defaultProjects);
+  if (projects.length) out.push([f("projects"), projects]);
+  if (d.defaultTimeEstimate && d.defaultTimeEstimate > 0) out.push([f("timeEstimate"), d.defaultTimeEstimate]);
+  const stamp = localIsoWithOffset(now);
+  out.push([f("dateCreated"), stamp]);
+  out.push([f("dateModified"), stamp]);
+  return out;
+}
+// 単純な値だけの YAML（文字列・数値・真偽・文字列配列）/ YAML for plain values only
+function yamlScalar(v: unknown): string {
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  const t = String(v);
+  return /^[\w./+-][\w ./:+-]*$/.test(t) && !/^(true|false|null|yes|no|~)$/i.test(t) && !/:\s/.test(t) ? t : JSON.stringify(t);
+}
+export function frontmatterText(entries: [string, unknown][]): string {
+  const lines = entries.map(([k, v]) =>
+    Array.isArray(v) ? `${k}:\n${v.map((x) => `  - ${yamlScalar(x)}`).join("\n")}` : `${k}: ${yamlScalar(v)}`
+  );
+  return `---\n${lines.join("\n")}\n---\n`;
+}
+
+// 新規タスク。互換モードでは TaskNotes の既定値（status/priority/tags/日付…）で作る
+// create a task; in compat mode it starts with TaskNotes' defaults (status, priority, tags, dates…)
+export async function createTask(
+  app: App,
+  folderPath: string,
+  baseName: string,
+  taskNotesSettings?: TaskNotesSettingsLike | null
+): Promise<TFile | null> {
   const dir = normalizePath(folderPath || "/");
   const prefix = dir === "/" ? "" : dir + "/";
   let name = baseName;
   let i = 1;
   while (app.vault.getAbstractFileByPath(`${prefix}${name}.md`)) name = `${baseName} ${++i}`;
   // 開始/終了は呼び出し側（view）が今日で埋める / caller fills start/end
-  const file = await app.vault.create(`${prefix}${name}.md`, "---\n---\n");
+  const initial = compat ? frontmatterText(taskNotesNewFrontmatter(taskNotesSettings ?? {})) : "---\n---\n";
+  const file = await app.vault.create(`${prefix}${name}.md`, initial);
   return file instanceof TFile ? file : null;
 }
 

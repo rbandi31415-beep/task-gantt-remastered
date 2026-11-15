@@ -4,6 +4,7 @@ import { TFile, TFolder } from "./obsidian-stub.mjs";
 import {
   configureCompat, parseDepEntry, makeDepEntry, combineDateTime, writeTz, applyTaskNotesTouch,
   collectTasks, addDependency, removeDependency, reparentTask, writeField, writeDates, inScope, makeTaskCompare,
+  taskNotesNewFrontmatter, frontmatterText, createTask,
 } from "./model.mjs";
 
 let pass = 0;
@@ -164,6 +165,29 @@ check("sort: status uses configured order", [
   { name: "x", status: "done", milestone: false },
   { name: "y", status: "open", milestone: false },
 ].sort(makeTaskCompare("status", "asc", statuses)).map((t) => t.name).join("") === "yx");
+
+// ── 新規タスクは TaskNotes と同じ項目で作る / new tasks carry the same fields TaskNotes writes ──
+const tnSettings = {
+  defaultTaskStatus: "open", defaultTaskPriority: "normal", taskTag: "task", taskIdentificationMethod: "tag",
+  fieldMapping: { status: "status", priority: "priority", scheduled: "scheduled", due: "due", dateCreated: "dateCreated", dateModified: "dateModified", contexts: "contexts", projects: "projects", timeEstimate: "timeEstimate" },
+  taskCreationDefaults: { defaultScheduledDate: "today", defaultDueDate: "none", defaultTags: "dermaglow, #startup", defaultContexts: "", defaultTimeEstimate: 0 },
+};
+const created = new Date(2026, 10, 14, 9, 0, 0, 5);
+const nf = Object.fromEntries(taskNotesNewFrontmatter(tnSettings, created));
+check("new task: status and priority defaults", nf.status === "open" && nf.priority === "normal");
+check("new task: task tag first, default tags after", same(nf.tags, ["task", "dermaglow", "startup"]));
+check("new task: default scheduled date (today)", nf.scheduled === "2026-11-14");
+check("new task: no due date unless TaskNotes sets one", !("due" in nf));
+check("new task: dateCreated and dateModified", /^2026-11-14T09:00:00\.005[+-]\d\d:\d\d$/.test(nf.dateCreated) && nf.dateCreated === nf.dateModified);
+check("new task: renamed fields follow TaskNotes' field mapping", "Status" in Object.fromEntries(taskNotesNewFrontmatter({ ...tnSettings, fieldMapping: { status: "Status" } }, created)));
+check("new task: property identification instead of tag", (() => { const o = Object.fromEntries(taskNotesNewFrontmatter({ ...tnSettings, taskIdentificationMethod: "property", taskPropertyName: "isTask", taskPropertyValue: "true", taskCreationDefaults: {} }, created)); return o.isTask === "true" && !("tags" in o); })());
+check("new task: frontmatter text", frontmatterText([["status", "open"], ["tags", ["task"]], ["dateCreated", "2026-11-14T09:00:00.005-05:00"]]) === "---\nstatus: open\ntags:\n  - task\ndateCreated: 2026-11-14T09:00:00.005-05:00\n---\n");
+{
+  const made = [];
+  const app2 = { vault: { getAbstractFileByPath: (p) => (made.find((m) => m.path === p) ? {} : null), create: async (path, text) => { const f = Object.assign(new TFile(), { path }); made.push({ path, text }); return f; } } };
+  await createTask(app2, "Tasks", "New task", tnSettings);
+  check("createTask (compat): TaskNotes recognizes it (tag + fields)", made[0].text.includes("tags:\n  - task") && made[0].text.includes("status: open") && made[0].text.includes("priority: normal") && made[0].text.includes("dateCreated: "));
+}
 
 // ── 依存の追加・削除 / adding and removing dependencies ──
 v = makeApp(vaultFiles);

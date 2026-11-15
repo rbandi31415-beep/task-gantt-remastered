@@ -11,7 +11,9 @@ import {
   writeDates,
   combineDateTime,
   writeTz,
+  isCompat,
   inScope,
+  TaskNotesSettingsLike,
   makeTaskCompare,
   writeField,
   writeBody,
@@ -2181,12 +2183,14 @@ export class GanttView extends ItemView {
   // 今のフォルダに 1 日タスク（開始=終了=今日）を作り、詳細パネルを開いて命名を促す
   // create a 1-day task (start = end = today) in the current folder, then open the panel to name it
   private async createNewTask(): Promise<void> {
-    const file = await createTask(this.app, this.folder, tr().newTaskName);
+    const tn = (this.app as unknown as { plugins?: { plugins?: Record<string, { settings?: TaskNotesSettingsLike }> } }).plugins?.plugins?.tasknotes?.settings ?? null;
+    const file = await createTask(this.app, this.folder, tr().newTaskName, tn);
     if (!file) return;
     const k = this.plugin.settings.keys;
     const today = dayToStr(todayIndex());
     await writeField(this.app, file.path, k.start, today);
-    await writeField(this.app, file.path, k.end, today);
+    // 互換モードでは期限を勝手に付けない（TaskNotes で締切扱いになるため）/ compat: no made-up due date (TaskNotes treats it as a deadline)
+    if (!isCompat()) await writeField(this.app, file.path, k.end, today);
     await this.refresh();
     await this.openDetail(file.path, true);
   }

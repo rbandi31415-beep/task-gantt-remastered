@@ -101,6 +101,7 @@ check("due-only task stays due-only when dragged", out.includes("due: 2026-11-22
 const fresh = newNote("Sprint 1 TWL sensor.md", "2026-11-14", new Date(2026, 10, 14, 9, 0, 0));
 const fp = parseTasks([{ rel: "Fresh.md", sha: "x", text: fresh }, files[2]])[0];
 check("new note: TaskNotes shape", fresh.includes("status: open") && fresh.includes("tags:\n  - task") && fp.parent === "Sprint 1 TWL sensor.md" && fp.start === "2026-11-14");
+check("new note: same fields TaskNotes writes", fresh.includes("priority: normal") && fresh.includes("scheduled: 2026-11-14") && /dateCreated: 2026-11-14T09:00:00/.test(fresh) && /dateModified: /.test(fresh) && !/\ndue:/.test(fresh));
 check("safeName strips path and link characters", !/[\/:\[\]?]/.test(safeName("../a/b: [[x]]?")) && !safeName("../x").startsWith("."));
 
 // ── Pages Function ──

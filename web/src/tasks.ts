@@ -1,7 +1,7 @@
 // Task notes ⇄ Gantt rows, without a DOM. Edits keep every untouched frontmatter key, its order
 // and formatting, and follow the same TaskNotes rules as the Obsidian plugin (shared code).
 import { parseDocument, Document } from "yaml";
-import { parseDepEntry, makeDepEntry, applyTaskNotesTouch, parseStored, configureCompat, makeTaskCompare } from "../../src/model";
+import { parseDepEntry, makeDepEntry, applyTaskNotesTouch, parseStored, configureCompat, makeTaskCompare, taskNotesNewFrontmatter, TaskNotesSettingsLike } from "../../src/model";
 import type { DepType, StatusDef } from "../../src/types";
 import { CONFLICT_DIR } from "../../src/share/core";
 
@@ -242,17 +242,24 @@ export function setDeps(fm: Record<string, unknown>, deps: { rel: string; type: 
 const pad = (n: number) => String(n).padStart(2, "0");
 export const today = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 
+// TaskNotes' creation defaults as configured in the vault (the web app can't read Obsidian's settings)
+export const TASKNOTES_DEFAULTS: TaskNotesSettingsLike = {
+  defaultTaskStatus: "open",
+  defaultTaskPriority: "normal",
+  taskTag: "task",
+  taskIdentificationMethod: "tag",
+  taskCreationDefaults: { defaultScheduledDate: "today", defaultDueDate: "none", defaultTimeEstimate: 0 },
+};
+
+// a new note with the same fields TaskNotes writes, plus the Gantt's startDate and parent
 export function newNote(parentRel: string | undefined, start: string, now = new Date()): string {
   const doc = new Document({});
-  const off = -now.getTimezoneOffset();
-  const iso = `${today(now)}T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}.${String(now.getMilliseconds()).padStart(3, "0")}${off < 0 ? "-" : "+"}${pad(Math.floor(Math.abs(off) / 60))}:${pad(Math.abs(off) % 60)}`;
-  doc.set("status", "open");
-  doc.set("priority", "normal");
-  doc.set(KEYS.start, start);
-  doc.set("tags", doc.createNode(["task"]));
-  if (parentRel) doc.set("projects", doc.createNode([wiki(parentRel)]));
-  doc.set("dateCreated", iso);
-  doc.set("dateModified", iso);
+  for (const [k, v] of taskNotesNewFrontmatter(TASKNOTES_DEFAULTS, now)) {
+    doc.set(k, doc.createNode(v));
+    if (k === "tags" && parentRel) doc.set("projects", doc.createNode([wiki(parentRel)]));
+    if (k === "priority") doc.set(KEYS.start, start);
+  }
+  if (parentRel && !doc.has("projects")) doc.set("projects", doc.createNode([wiki(parentRel)]));
   return joinNote(doc, "\n");
 }
 
