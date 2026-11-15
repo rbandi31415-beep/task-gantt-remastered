@@ -1,6 +1,7 @@
 import { App, TFile, TFolder, getAllTags, normalizePath } from "obsidian";
 import { GanttSettings } from "./settings";
 import { Task, Row, Dep, DepType, StatusDef, StatusGroup } from "./types";
+import { CONFLICT_DIR } from "./share/core";
 
 // ── ステータスグループ / status groups ──
 // 移行用の推測に使うキーワード（id・ラベルを小文字化して部分一致）。上から順に評価し、
@@ -232,8 +233,11 @@ export function collectTasks(app: App, settings: GanttSettings, folderPath: stri
   const files: TFile[] = [];
   const walk = (folder: TFolder) => {
     for (const child of folder.children) {
-      if (child instanceof TFile && child.extension === "md") files.push(child);
-      else if (child instanceof TFolder && settings.recurse) walk(child);
+      if (child instanceof TFile && child.extension === "md") {
+        // 同期の競合コピーはタスクではない / sync conflict copies are not tasks
+        if (app.metadataCache.getFileCache(child)?.frontmatter?.syncConflict === true) continue;
+        files.push(child);
+      } else if (child instanceof TFolder && settings.recurse && child.name !== CONFLICT_DIR) walk(child);
     }
   };
   walk(root);
@@ -331,6 +335,7 @@ export function collectFolders(app: App, settings: GanttSettings, folderPath: st
   const walk = (folder: TFolder) => {
     for (const child of folder.children) {
       if (!(child instanceof TFolder)) continue;
+      if (child.name === CONFLICT_DIR) continue; // 同期の競合コピー置き場は表示しない / never list the sync-conflict folder
       const rel = isVaultRoot ? child.path : child.path.slice(rootPath.length + 1);
       out.push(rel.split("/"));
       walk(child);

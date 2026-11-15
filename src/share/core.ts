@@ -149,7 +149,10 @@ export class GitHubRepo {
   }
 
   private async call(method: string, path: string, body?: unknown): Promise<unknown> {
-    const res = await this.http(method, this.api + path, this.ref.token, body);
+    // GitHub marks API responses cacheable for 60 s and Obsidian's network stack honors that, so a
+    // read right after our own push could return the pre-push branch. Every read is made unique.
+    const url = method === "GET" ? `${this.api}${path}${path.includes("?") ? "&" : "?"}_=${Date.now()}${Math.random().toString(36).slice(2, 6)}` : this.api + path;
+    const res = await this.http(method, url, this.ref.token, body);
     if (res.status >= 400) {
       const msg = (res.json as { message?: string } | null)?.message ?? `HTTP ${res.status}`;
       throw new GitHubError(res.status, msg);
@@ -165,6 +168,28 @@ export class GitHubRepo {
       return { commit: ref.object.sha, tree: commit.tree.sha };
     } catch (e) {
       if (e instanceof GitHubError && (e.status === 404 || e.status === 409)) return null;
+      throw e;
+    }
+  }
+
+  // base から見た head の位置（ahead/behind/identical/diverged）。不明なら null
+  // where `head` stands relative to `base` (ahead/behind/identical/diverged); null if unknown
+  async compare(base: string, head: string): Promise<string | null> {
+    try {
+      const r = (await this.call("GET", `/compare/${base}...${head}`)) as { status?: string };
+      return r.status ?? null;
+    } catch (e) {
+      if (e instanceof GitHubError && (e.status === 404 || e.status === 422)) return null;
+      throw e;
+    }
+  }
+
+  // blob を取得。無ければ null / fetch a blob, or null if it no longer exists
+  async blobOrNull(sha: string): Promise<Uint8Array | null> {
+    try {
+      return await this.blob(sha);
+    } catch (e) {
+      if (e instanceof GitHubError && (e.status === 404 || e.status === 422)) return null;
       throw e;
     }
   }
@@ -235,6 +260,97 @@ export class GitHubRepo {
       branch: this.ref.branch,
     });
   }
+}
+
+// ── ノートの三方マージ（フロントマターはキー単位、本文は丸ごと）──
+// three-way note merge: frontmatter key by key, body as a whole. Works on the raw text of each
+// key's block so untouched keys keep their exact formatting.
+export const CONFLICT_DIR = "Sync conflicts";
+
+interface Fm {
+  keys: string[];
+  blocks: Map<string, string>; // key -> raw text of the key line and its continuation lines
+  pre: string; // lines before the first key (comments)
+}
+export function splitFrontmatter(text: string): { fm: string | null; body: string } {
+  const t = text.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n");
+  const m = t.match(/^---\n([\s\S]*?)\n?---[ \t]*(?:\n|$)/);
+  if (!m) return { fm: null, body: t };
+  return { fm: m[1], body: t.slice(m[0].length) };
+}
+function parseFm(fm: string): Fm {
+  const out: Fm = { keys: [], blocks: new Map(), pre: "" };
+  let cur: string | null = null;
+  const pre: string[] = [];
+  for (const line of fm.split("\n")) {
+    const m = line.match(/^([^\s#\-][^:]*):(?:\s|$)/);
+    if (m) {
+      cur = m[1];
+      if (!out.blocks.has(cur)) out.keys.push(cur);
+      out.blocks.set(cur, line);
+    } else if (cur) out.blocks.set(cur, `${out.blocks.get(cur)}\n${line}`);
+    else pre.push(line);
+  }
+  out.pre = pre.join("\n");
+  return out;
+}
+const isoTime = (block: string | undefined): number => {
+  const v = block?.split(":").slice(1).join(":").trim().replace(/^["']|["']$/g, "");
+  const t = v ? Date.parse(v) : NaN;
+  return Number.isFinite(t) ? t : 0;
+};
+// フィールド単位で決着しない衝突があれば clean=false（ローカル優先）
+// clean=false when the same field (or the body) changed differently on both sides; local wins those
+export function mergeNotes(base: string | null, local: string, remote: string): { text: string; clean: boolean; conflicts: string[] } {
+  if (local === remote) return { text: local, clean: true, conflicts: [] };
+  if (base !== null && local === base) return { text: remote, clean: true, conflicts: [] };
+  if (base !== null && remote === base) return { text: local, clean: true, conflicts: [] };
+  const B = base === null ? null : splitFrontmatter(base);
+  const L = splitFrontmatter(local);
+  const R = splitFrontmatter(remote);
+  if (B === null || B.fm === null || L.fm === null || R.fm === null) return { text: local, clean: false, conflicts: ["(whole note)"] };
+  const b = parseFm(B.fm), l = parseFm(L.fm), r = parseFm(R.fm);
+  const conflicts: string[] = [];
+  const keys = [...l.keys, ...r.keys.filter((k) => !l.blocks.has(k)), ...b.keys.filter((k) => !l.blocks.has(k) && !r.blocks.has(k))];
+  const outBlocks: string[] = [];
+  for (const k of keys) {
+    const bv = b.blocks.get(k), lv = l.blocks.get(k), rv = r.blocks.get(k);
+    let v: string | undefined;
+    if (lv === rv) v = lv;
+    else if (lv === bv) v = rv;
+    else if (rv === bv) v = lv;
+    else if (k === "dateModified") v = isoTime(rv) > isoTime(lv) ? rv : lv; // bookkeeping: newest wins
+    else {
+      v = lv;
+      conflicts.push(k);
+    }
+    if (v !== undefined) outBlocks.push(v);
+  }
+  let body: string;
+  if (L.body === R.body) body = L.body;
+  else if (L.body === B.body) body = R.body;
+  else if (R.body === B.body) body = L.body;
+  else {
+    body = L.body;
+    conflicts.push("(notes text)");
+  }
+  const fm = [l.pre, ...outBlocks].filter((x) => x !== "").join("\n");
+  return { text: `---\n${fm}\n---\n${body}`, clean: conflicts.length === 0, conflicts };
+}
+
+// 競合コピー：タスクとして数えられないよう印を付け、tags を外す
+// conflict copy: flagged so no Gantt/TaskNotes/web view treats it as a task, and untagged
+export function conflictCopy(remoteText: string, fields: string[]): string {
+  const { fm, body } = splitFrontmatter(remoteText);
+  const note = `> Sync conflict: this is the repo's version, saved because ${fields.join(", ")} changed on both sides. The task itself kept the Obsidian version. Copy anything you need over, then delete this file.\n\n`;
+  if (fm === null) return `---\nsyncConflict: true\n---\n${note}${body}`;
+  const f = parseFm(fm);
+  const blocks = f.keys.filter((k) => k !== "tags" && k !== "syncConflict").map((k) => f.blocks.get(k)!);
+  return `---\nsyncConflict: true\n${[f.pre, ...blocks].filter((x) => x !== "").join("\n")}\n---\n${note}${body}`;
+}
+export function conflictCopyRel(rel: string, now: Date, exists: (rel: string) => boolean): string {
+  const name = rel.split("/").pop()!;
+  return conflictName(`${CONFLICT_DIR}/${name}`, now, exists);
 }
 
 export const SHARED_README = `# Shared task folder

@@ -10,6 +10,7 @@ export function fakeGitHub() {
   let n = 0;
   const id = (p) => `${p}${(++n).toString(16).padStart(8, "0")}`;
   const calls = [];
+  let stale = []; // queued stale tips to hand out on the next GET ref calls (simulates GitHub's 60 s cache)
   const putBlob = async (bytes) => {
     const sha = await gitBlobSha(bytes);
     objects.set(sha, { type: "blob", bytes });
@@ -31,7 +32,15 @@ export function fakeGitHub() {
     if (token !== "tok") return { status: 401, json: { message: "Bad credentials" } };
     let m;
     if (method === "GET" && /^\/git\/ref\/heads\//.test(path)) {
+      if (stale.length) return { status: 200, json: { object: { sha: stale.shift() } } };
       return refSha ? { status: 200, json: { object: { sha: refSha } } } : { status: 409, json: { message: "Git Repository is empty." } };
+    }
+    if (method === "GET" && (m = path.match(/^\/compare\/(\w+)\.\.\.(\w+)/))) {
+      const anc = (desc, a) => { for (let c = desc; c; c = objects.get(c)?.parents?.[0]) if (c === a) return true; return false; };
+      const [, b, h] = m;
+      if (!objects.has(b) || !objects.has(h)) return { status: 404, json: { message: "Not Found" } };
+      const status = b === h ? "identical" : anc(h, b) ? "ahead" : anc(b, h) ? "behind" : "diverged";
+      return { status: 200, json: { status } };
     }
     if (method === "GET" && (m = path.match(/^\/git\/commits\/(\w+)/))) return { status: 200, json: { tree: { sha: objects.get(m[1]).tree } } };
     if (method === "GET" && (m = path.match(/^\/git\/trees\/(\w+)/))) {
@@ -90,6 +99,9 @@ export function fakeGitHub() {
       refSha = makeCommit(entries, [refSha], "web edit");
     },
     lastMessage: () => objects.get(refSha).message,
+    tip: () => refSha,
+    serveStale: (sha, times = 1) => { for (let i = 0; i < times; i++) stale.push(sha); },
+    commitsSince: (sha) => { let k = 0; for (let c = refSha; c && c !== sha; c = objects.get(c).parents[0]) k++; return k; },
     commits: () => {
       let c = refSha, k = 0;
       while (c) { k++; c = objects.get(c).parents[0]; }

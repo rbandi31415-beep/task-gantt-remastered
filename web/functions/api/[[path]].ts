@@ -87,6 +87,7 @@ export const fetchHttp: Http = async (method, url, token, body) => {
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
       "User-Agent": "dermaglow-gantt",
+      "Cache-Control": "no-cache",
       ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,

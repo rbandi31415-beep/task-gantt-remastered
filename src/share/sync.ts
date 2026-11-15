@@ -2,7 +2,7 @@
 import { App, TFile, TFolder, normalizePath, requestUrl } from "obsidian";
 import {
   GitHubRepo, Http, GitHubError, FileChange, SyncPlan, planSync, gitBlobSha, toRel, toVaultPath,
-  conflictName, normFolder, SHARED_README,
+  normFolder, SHARED_README, mergeNotes, conflictCopy, conflictCopyRel, CONFLICT_DIR,
 } from "./core";
 
 export interface ShareSettings {
@@ -12,6 +12,8 @@ export interface ShareSettings {
   branch: string;
   intervalMin: number; // 定期同期の間隔（分）/ periodic sync interval
   base: Record<string, string>; // 前回同期時の rel → blob sha / rel → sha at last sync
+  lastCommit: string; // 最後に確認/作成したコミット / last commit we saw or made (stale-read guard)
+  legacyCopiesCleaned: boolean; // 旧形式の競合コピーを片付け済み / old-style conflict copies cleaned up
   lastSync: number;
   lastError: string;
 }
@@ -23,6 +25,8 @@ export const DEFAULT_SHARE: ShareSettings = {
   branch: "main",
   intervalMin: 2,
   base: {},
+  lastCommit: "",
+  legacyCopiesCleaned: false,
   lastSync: 0,
   lastError: "",
 };
@@ -48,6 +52,7 @@ export const obsidianHttp: Http = async (method, url, token, body) => {
       Authorization: `Bearer ${token}`,
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
+      "Cache-Control": "no-cache",
       ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -64,7 +69,16 @@ export const obsidianHttp: Http = async (method, url, token, body) => {
 
 export interface SyncResult {
   plan: SyncPlan;
+  merged: string[]; // 自動マージできたノート / notes merged field by field
   conflicts: string[]; // 作った競合コピー / conflict copies written
+  skipped: string[]; // 同期中に編集されたので次回へ / edited during the pass, left for the next one
+}
+
+// GitHub の読み取りがまだ古い（自分の直前のコミットより前を返した）/ GitHub returned an older branch tip than one we already saw
+export class StaleReadError extends Error {
+  constructor() {
+    super("GitHub hasn't caught up with the last sync yet");
+  }
 }
 
 const enc = new TextEncoder();
@@ -100,6 +114,10 @@ async function writeLocal(app: App, folder: string, rel: string, text: string): 
 }
 
 // 1 回の同期。http/now はテスト用に注入可 / one sync pass; http/now injectable for tests
+//
+// Order matters for robustness: everything that goes to GitHub is decided and committed FIRST.
+// Only after that commit succeeds are local files written, so a failed or retried pass never
+// leaves half-applied changes or extra conflict copies behind.
 export async function syncOnce(
   app: App,
   share: ShareSettings,
@@ -119,6 +137,12 @@ export async function syncOnce(
     await repo.initialize(SHARED_README);
     head = await repo.head();
     if (!head) throw new Error("Could not initialize the repository");
+  }
+  // 古い読み取りの検出：前回見た/作ったコミットより後ろを返されたら何もしない
+  // stale-read guard: if GitHub hands back a tip that is behind one we already saw, do nothing
+  if (share.lastCommit && head.commit !== share.lastCommit) {
+    const status = await repo.compare(head.commit, share.lastCommit);
+    if (status === "ahead") throw new StaleReadError();
   }
 
   // 三方の状態を集める / gather the three sides
@@ -140,48 +164,123 @@ export async function syncOnce(
     throw new Error(`The shared folder "${folder}" is empty or missing here; refusing to delete ${plan.deleteRemote.length} file(s) from the repo. Fix the folder setting, or clear the repo yourself if you really mean it.`);
   if (remote.size === 0 && plan.deleteLocal.length > 0)
     throw new Error(`The repo has no task files; refusing to delete ${plan.deleteLocal.length} local file(s). Check the repository setting.`);
+
+  // ── 1. 送るものを決める（ローカルはまだ触らない）/ decide what goes up (nothing local is touched yet) ──
+  const outgoing = new Map<string, string | null>(); // rel -> text, null = delete
+  const localWrites = new Map<string, string>(); // rel -> text to write locally after the commit
+  for (const rel of plan.push) outgoing.set(rel, texts.get(rel)!);
+  for (const rel of plan.deleteRemote) outgoing.set(rel, null);
+  for (const rel of plan.pull) localWrites.set(rel, dec.decode(await repo.blob(remote.get(rel)!)));
+
+  const merged: string[] = [];
+  const conflicts: string[] = [];
+  // 既存の競合コピーの内容（同じコピーを二度作らない）/ existing copy contents, so an identical copy is never made twice
+  const copyShas = new Set<string>();
+  for (const [rel, sha] of [...local, ...remote]) if (rel.startsWith(`${CONFLICT_DIR}/`)) copyShas.add(sha);
+  const taken = (r: string) => files.has(r) || remote.has(r) || outgoing.has(r);
+  for (const rel of plan.conflict) {
+    const remoteText = dec.decode(await repo.blob(remote.get(rel)!));
+    const baseSha = base.get(rel);
+    const baseBytes = baseSha ? await repo.blobOrNull(baseSha) : null;
+    const m = mergeNotes(baseBytes ? dec.decode(baseBytes) : null, texts.get(rel)!, remoteText);
+    outgoing.set(rel, m.text);
+    if (m.text !== texts.get(rel)) localWrites.set(rel, m.text);
+    if (m.clean) {
+      merged.push(rel);
+      continue;
+    }
+    const copy = conflictCopy(remoteText, m.conflicts);
+    const copySha = await gitBlobSha(enc.encode(copy));
+    if (copyShas.has(copySha)) continue; // 同一内容のコピーが既にある / an identical copy already exists
+    const copyRel = conflictCopyRel(rel, now(), taken);
+    copyShas.add(copySha);
+    outgoing.set(copyRel, copy);
+    localWrites.set(copyRel, copy);
+    conflicts.push(copyRel);
+  }
+
+  // ── 2. コミット（失敗したらローカルは一切変えない）/ commit; on failure nothing local has changed ──
   const newBase = new Map<string, string>();
   for (const rel of plan.same) newBase.set(rel, local.get(rel)!);
+  let tip = head.commit;
+  if (outgoing.size) {
+    const changes: FileChange[] = [...outgoing].map(([rel, text]) => ({ rel, content: text === null ? null : enc.encode(text) }));
+    const n = changes.length;
+    tip = await repo.commit(head, changes, `Obsidian sync: ${n} file${n === 1 ? "" : "s"}`);
+    for (const [rel, text] of outgoing) if (text !== null) newBase.set(rel, await gitBlobSha(enc.encode(text)));
+  }
+  share.lastCommit = tip;
 
-  // リモート → ローカル / remote → local
-  for (const rel of plan.pull) {
-    const bytes = await repo.blob(remote.get(rel)!);
-    await writeLocal(app, folder, rel, dec.decode(bytes));
-    newBase.set(rel, remote.get(rel)!);
+  // ── 3. ローカルへ反映。読んだ後に編集されたファイルは触らず次回へ ──
+  // apply locally; a file edited since we read it is left alone and settled on the next pass
+  const skipped: string[] = [];
+  const unchangedSinceRead = async (rel: string): Promise<boolean> => {
+    const vp = toVaultPath(folder, rel);
+    const f = vp ? app.vault.getAbstractFileByPath(normalizePath(vp)) : null;
+    if (!(f instanceof TFile)) return !texts.has(rel); // 読んだ時も無かった / it didn't exist when read either
+    return (await app.vault.read(f)) === texts.get(rel);
+  };
+  const keepOldBase = (rel: string) => {
+    // a merged note already went up: track the pre-merge remote blob (it exists on GitHub) so the
+    // next pass merges the new local edit against it; otherwise keep whatever base we had
+    if (plan.conflict.includes(rel)) newBase.set(rel, remote.get(rel)!);
+    else if (base.has(rel)) newBase.set(rel, base.get(rel)!);
+    else newBase.delete(rel);
+  };
+  for (const [rel, text] of localWrites) {
+    if (!(await unchangedSinceRead(rel))) {
+      skipped.push(rel);
+      keepOldBase(rel);
+      continue;
+    }
+    await writeLocal(app, folder, rel, text);
+    if (!newBase.has(rel)) newBase.set(rel, remote.get(rel)!);
   }
   for (const rel of plan.deleteLocal) {
     const f = files.get(rel);
-    if (f && toRel(folder, f.path) === rel) await app.fileManager.trashFile(f);
-  }
-
-  // 競合：ローカルを正とし、リモート版は隣にコピーとして残す（次回ローカルが送られる）
-  // conflicts: local wins the original name, the remote version is kept beside it as a copy
-  // (base is set to the remote sha so the local version is pushed on this pass)
-  const conflicts: string[] = [];
-  const taken = (r: string) => files.has(r) || remote.has(r) || conflicts.includes(r);
-  for (const rel of plan.conflict) {
-    const bytes = await repo.blob(remote.get(rel)!);
-    const copy = conflictName(rel, now(), taken);
-    await writeLocal(app, folder, copy, dec.decode(bytes));
-    conflicts.push(copy);
-  }
-
-  // ローカル → リモート（1 コミット）。競合コピーは次回の走査でローカル新規として送られる
-  // local → remote in a single commit; conflict copies go up on the next pass as new local files
-  const changes: FileChange[] = [
-    ...plan.push.map((rel) => ({ rel, content: enc.encode(texts.get(rel)!) })),
-    ...plan.conflict.map((rel) => ({ rel, content: enc.encode(texts.get(rel)!) })),
-    ...plan.deleteRemote.map((rel) => ({ rel, content: null as Uint8Array | null })),
-  ];
-  if (changes.length) {
-    const n = changes.length;
-    await repo.commit(head, changes, `Obsidian sync: ${n} file${n === 1 ? "" : "s"}`);
-    for (const rel of [...plan.push, ...plan.conflict]) newBase.set(rel, local.get(rel)!);
+    if (!f || toRel(folder, f.path) !== rel) continue;
+    if (!(await unchangedSinceRead(rel))) {
+      skipped.push(rel);
+      keepOldBase(rel); // edited after we read it: next pass sees "remote deleted, local edited" and restores it
+      continue;
+    }
+    await app.fileManager.trashFile(f);
   }
   share.base = Object.fromEntries(newBase);
   share.lastSync = now().getTime();
   share.lastError = "";
-  return { plan, conflicts };
+  return { plan, merged, conflicts, skipped };
+}
+
+// 旧形式（フォルダ直下の "名前 (conflict YYYY-MM-DD HHMM[ N]).md"）の競合コピーを一度だけ片付ける。
+// 元タスクが存在し、コピーの dateModified が元以下（＝古い途中版）のものだけをゴミ箱へ
+// one-time cleanup of old-style copies ("Name (conflict YYYY-MM-DD HHMM[ N]).md" at the folder root):
+// only copies whose original still exists and whose dateModified is not newer go to the trash
+const LEGACY_COPY = /^(.+) \(conflict \d{4}-\d{2}-\d{2} \d{4}(?: \d+)?\)\.md$/;
+export async function cleanLegacyCopies(app: App, folder: string): Promise<string[]> {
+  const f = normFolder(folder);
+  if (!f) return [];
+  const files = localFiles(app, f);
+  const modified = async (file: TFile): Promise<number> => {
+    const m = (await app.vault.read(file)).match(/^dateModified:\s*["']?([^"'\n]+)/m);
+    const t = m ? Date.parse(m[1]) : NaN;
+    return Number.isFinite(t) ? t : 0;
+  };
+  const removed: string[] = [];
+  for (const [rel, file] of files) {
+    if (rel.includes("/")) continue;
+    const m = rel.match(LEGACY_COPY);
+    if (!m) continue;
+    const original = files.get(`${m[1]}.md`);
+    if (!original) continue;
+    // older than the task, or the same content apart from dateModified: a stale duplicate
+    const strip = (t: string) => t.replace(/^dateModified:.*$/m, "");
+    const same = strip(await app.vault.read(file)) === strip(await app.vault.read(original));
+    if (!same && (await modified(file)) > (await modified(original))) continue;
+    await app.fileManager.trashFile(file);
+    removed.push(rel);
+  }
+  return removed;
 }
 
 // 同期の実行管理（多重実行防止・デバウンス・定期実行）/ run control: no overlap, debounce, interval
@@ -244,17 +343,27 @@ export class ShareSyncer {
       let attempt = 0;
       for (;;) {
         try {
+          if (!s.legacyCopiesCleaned) {
+            const removed = await cleanLegacyCopies(this.app, s.folder);
+            s.legacyCopiesCleaned = true;
+            if (removed.length) this.notify(`Shared tasks: moved ${removed.length} old duplicate conflict copies to the trash.`);
+          }
           const res = await syncOnce(this.app, s, loadToken(this.app));
           const p = res.plan;
-          const moved = p.pull.length + p.push.length + p.deleteLocal.length + p.deleteRemote.length;
+          const moved = p.pull.length + p.push.length + p.deleteLocal.length + p.deleteRemote.length + res.merged.length;
           if (res.conflicts.length)
-            this.notify(`Shared tasks: ${res.conflicts.length} conflict copy saved (${res.conflicts.join(", ")}). Merge it into the original, then delete the copy.`);
+            this.notify(`Shared tasks: the same field was edited on both sides in ${res.conflicts.length} task(s). Obsidian's version was kept; the other version is in "${CONFLICT_DIR}" (not shown as a task). Copy anything you need, then delete it.`);
           else if (manual) this.notify(moved ? `Shared tasks synced (${moved} change${moved === 1 ? "" : "s"})` : "Shared tasks already up to date");
+          if (res.skipped.length) this.schedule(3_000); // settle files edited mid-pass
           break;
         } catch (e) {
-          // 他者のコミットと競合（fast-forward 不可）→ 取り直して 1 回だけ再試行
-          // someone else committed in between (not fast-forward): re-read and retry once
-          if (e instanceof GitHubError && e.status === 422 && attempt++ < 1) continue;
+          // GitHub がまだ追いついていない／他者のコミットが割り込んだ → 少し待って取り直す（最大 3 回）
+          // GitHub hasn't caught up yet, or someone committed in between: wait, re-read, retry (3 tries)
+          const retriable = e instanceof StaleReadError || (e instanceof GitHubError && (e.status === 409 || e.status === 422));
+          if (retriable && attempt < 3) {
+            await new Promise((r) => window.setTimeout(r, 1500 * 2 ** attempt++));
+            continue;
+          }
           throw e;
         }
       }

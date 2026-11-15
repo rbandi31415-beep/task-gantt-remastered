@@ -3,6 +3,7 @@
 import { parseDocument, Document } from "yaml";
 import { parseDepEntry, makeDepEntry, applyTaskNotesTouch, parseStored, configureCompat, makeTaskCompare } from "../../src/model";
 import type { DepType, StatusDef } from "../../src/types";
+import { CONFLICT_DIR } from "../../src/share/core";
 
 export const STATUSES: StatusDef[] = [
   { id: "none", label: "None", color: "#9aa0a6", group: "active" },
@@ -72,7 +73,9 @@ export function makeResolver(rels: string[]): (link: string) => string | undefin
   };
 }
 
-export function parseTasks(files: RemoteFile[]): WebTask[] {
+export function parseTasks(all: RemoteFile[]): WebTask[] {
+  // sync conflict copies live in their own folder and are never tasks
+  const files = all.filter((f) => !f.rel.startsWith(`${CONFLICT_DIR}/`) && !/^syncConflict:\s*true\s*$/m.test(splitNote(f.text).yaml));
   const resolve = makeResolver(files.map((f) => f.rel));
   const tasks = files.map((f): WebTask => {
     const { yaml, body } = splitNote(f.text);

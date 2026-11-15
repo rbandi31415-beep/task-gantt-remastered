@@ -123,12 +123,14 @@ const vaultFiles = {
   },
   "Tasks/Demo day.md": { status: "open", due: "2026-12-01", milestone: true },
   "Some reference note.md": { tags: ["note"] },
+  "Tasks/Sync conflicts/CAD v1 (conflict 2026-11-14 1532).md": { syncConflict: true, status: "open" },
+  "Tasks/Stray copy.md": { syncConflict: true, status: "open" },
 };
 
 let v = makeApp(vaultFiles);
 let tasks = collectTasks(v.app, settings, "Tasks");
 const T = (n) => tasks.find((t) => t.name === n);
-check("collect: only files in scope", tasks.length === 5);
+check("collect: only files in scope, conflict copies skipped", tasks.length === 5);
 check("collect: object blockedBy resolves", same(T("Prelim BOM").deps, [{ path: "Tasks/Draft model.md", type: "FS" }]));
 check("collect: unresolvable dependency dropped", T("Prelim BOM").deps.length === 1);
 check("collect: mixed object/string deps", same(T("CAD v1").deps.map((d) => d.type), ["SS", "FF"]));

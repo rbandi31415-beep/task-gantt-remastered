@@ -51,6 +51,10 @@ check("parse: explicit milestone", T("Demo").milestone);
 check("parse: milestone drawn on its due date", T("Demo").start === "2026-12-01" && T("Demo").end === "2026-12-01");
 check("parse: body preserved", T("Preliminary BOM").body === "\nBody line one.\n");
 
+const withCopies = parseTasks([...files,
+  { rel: "Sync conflicts/CAD v1 (conflict 2026-11-14 1532).md", sha: "c1", text: "---\nsyncConflict: true\nstatus: open\n---\n" },
+  { rel: "Stray copy.md", sha: "c2", text: "---\nsyncConflict: true\nstatus: open\n---\n" }]);
+check("conflict copies are never tasks", withCopies.length === tasks.length);
 const rows = buildWebRows(tasks, new Set(), false);
 check("rows: parent first, children indented", rows[0].task.name === "Demo" || rows.some((r) => r.task.name === "Sprint 1 TWL sensor" && r.depth === 0 && r.hasChildren));
 const sprintRow = rows.find((r) => r.task.name === "Sprint 1 TWL sensor");
